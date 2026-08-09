@@ -60,40 +60,53 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--json", action="store_true", help="machine-readable envelope (same shape for every check)")
     sub = ap.add_subparsers(dest="cmd", required=True, parser_class=_Parser)
 
-    b = sub.add_parser("baseline", help="dirty-vs-clean failing-set diff: settle 'that failure is pre-existing'")
+    def _sub(name, **kw):
+        """Every subcommand also takes --json, not just the top level.
+
+        `cc pr-branch <repo> --json` used to be a usage error because --json
+        was global-only. That tripped the person who wrote it, which is enough
+        evidence it would trip everyone else. argparse's `default=SUPPRESS`
+        keeps the top-level value when the trailing form is absent.
+        """
+        p = sub.add_parser(name, **kw)
+        p.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                       help="machine-readable envelope")
+        return p
+
+    b = _sub("baseline", help="dirty-vs-clean failing-set diff: settle 'that failure is pre-existing'")
     b.add_argument("repo")
     b.add_argument("--timeout", type=int, default=900)
     b.add_argument("suite", nargs=argparse.REMAINDER, help="-- <suite command>")
 
-    pb = sub.add_parser("pr-branch", help="catch replayed/stray commits before you push")
+    pb = _sub("pr-branch", help="catch replayed/stray commits before you push")
     pb.add_argument("repo")
     pb.add_argument("--branch")
     pb.add_argument("--remote")
     pb.add_argument("--base", help="override the resolved default branch")
     pb.add_argument("--max-commits", type=int, default=prbranch.SANE_COMMIT_CEILING)
 
-    c = sub.add_parser("ci", help="Actions supply-chain pass (delegates to zizmor/actionlint), routes deep review")
+    c = _sub("ci", help="Actions supply-chain pass (delegates to zizmor/actionlint), routes deep review")
     c.add_argument("repo")
     c.add_argument("--changed", default="", help="comma-separated changed files, to trigger routing")
     c.add_argument("--require-sast", action="store_true", help="INVALID if no Actions SAST is installed")
     c.add_argument("--no-audit", action="store_true")
 
-    s = sub.add_parser("scope", help="is this host inside the program's declared scope (suffix-anchored)")
+    s = _sub("scope", help="is this host inside the program's declared scope (suffix-anchored)")
     s.add_argument("program")
     s.add_argument("hosts", nargs="+")
 
-    sec = sub.add_parser("secrets", help="aim gitleaks at report drafts / evidence dirs / vault-bound notes")
+    sec = _sub("secrets", help="aim gitleaks at report drafts / evidence dirs / vault-bound notes")
     sec.add_argument("paths", nargs="+")
     sec.add_argument("--allow", action="append", default=[], help="file allowed to contain the finding (the report itself)")
     sec.add_argument("--history", action="store_true", help="also scan git history")
 
-    v = sub.add_parser("vrp", help="is this vuln class fileable here - ask BEFORE building the PoC")
+    v = _sub("vrp", help="is this vuln class fileable here - ask BEFORE building the PoC")
     v.add_argument("program")
     v.add_argument("vuln_class")
     v.add_argument("--max-age-days", type=int, default=vrp.DEFAULT_MAX_AGE_DAYS)
     v.add_argument("--tier", help="the target project's program tier (e.g. OT2), for the payout floor")
 
-    rp = sub.add_parser("run", help="a named profile (sequencing only, no new checks)")
+    rp = _sub("run", help="a named profile (sequencing only, no new checks)")
     rp.add_argument("profile", choices=sorted(PROFILES))
     rp.add_argument("repo", nargs="?", default=".")
     rp.add_argument("--body")
@@ -103,14 +116,14 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--changed", default="")
     rp.add_argument("--paths", nargs="*", default=[])
 
-    e = sub.add_parser("enforce", help="RUNS a local target: does a declared control actually engage, and does the target admit it when it does not")
+    e = _sub("enforce", help="RUNS a local target: does a declared control actually engage, and does the target admit it when it does not")
     e.add_argument("spec", help="spec name in specs/, or a path to a spec json")
     e.add_argument("--only", action="append", default=[], help="run only these control names")
     e.add_argument("--dry-run", action="store_true", help="print the probes without executing them")
     e.add_argument("--timeout", type=int, default=120)
     e.add_argument("--record-red", action="store_true", help="record controls that FAIL here as proven-discriminating (run against a deliberately broken target)")
 
-    d = sub.add_parser("decay", help="which checks have not fired - delete them")
+    d = _sub("decay", help="which checks have not fired - delete them")
     d.add_argument("--days", type=int, default=60)
 
     sub.add_parser("checks", help="list check names")

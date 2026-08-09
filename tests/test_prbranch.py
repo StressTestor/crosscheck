@@ -121,6 +121,44 @@ class TestPrBranch(unittest.TestCase):
         r = prbranch.check(self.repo)
         self.assertEqual(r.code, EXIT_CLEAN)
 
+    def test_base_is_the_branch_actual_base_not_the_declared_default(self):
+        # odysseus publishes `dev` as its default while contribution branches
+        # are cut from `main`. Diffing against the declared default produced
+        # 1925 "ahead" and ~40 other-authored commits reported as replayed
+        # strays - all of it ordinary main history dev lacks.
+        # Build that shape: a divergent `dev`, a branch cut from `master`.
+        git(self.up, "checkout", "-qb", "dev")
+        for i in range(3):
+            with open(os.path.join(self.up, f"dev{i}.txt"), "w") as fh:
+                fh.write("x\n")
+            git(self.up, "add", "-A")
+            git(self.up, "commit", "-qm", f"dev only {i}")
+        git(self.up, "checkout", "-q", "master")
+        git(self.repo, "fetch", "-q", "upstream")
+        # Make the remote *declare* dev as its default.
+        git(self.repo, "symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/dev")
+
+        self._commit("Me", "me@mine.tld", "mine.txt")
+        declared = G.default_branch(self.repo, "upstream")
+        self.assertEqual(declared, "dev", "fixture did not set the declared default")
+
+        base, cands = G.plausible_base(self.repo, "upstream", "fix/thing", declared)
+        self.assertEqual(base, "master", f"picked the declared default over the real base: {cands}")
+
+        r = prbranch.check(self.repo)
+        self.assertEqual(r.data["base"], "upstream/master")
+        self.assertEqual(r.code, EXIT_CLEAN, [f.detail for f in r.findings])
+        self.assertTrue(
+            any("not the declared default" in n for n in r.notes),
+            f"picked a different base silently: {r.notes}",
+        )
+
+    def test_declared_default_wins_when_it_is_the_nearest(self):
+        # Discriminating: do not wander off the declared default for no reason.
+        self._commit("Me", "me@mine.tld", "mine.txt")
+        base, _ = G.plausible_base(self.repo, "upstream", "fix/thing", "master")
+        self.assertEqual(base, "master")
+
     def test_not_a_repo_is_invalid(self):
         self.assertEqual(prbranch.check(tempfile.mkdtemp()).code, EXIT_INVALID)
 

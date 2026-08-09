@@ -66,6 +66,44 @@ def default_branch(path: str, remote: str) -> str | None:
     return None
 
 
+def plausible_base(path: str, remote: str, branch: str, declared: str | None) -> tuple[str | None, list[dict]]:
+    """Pick the base this branch is ACTUALLY cut from, not the declared default.
+
+    A repo can publish `dev` as its default while contribution branches are cut
+    from `main`. Diffing against the declared default then yields a nonsense
+    set - odysseus produced 1925 "ahead" and ~40 commits by other authors, all
+    of them ordinary `main` history that `dev` simply does not contain. The
+    check reported them as replayed strays. That is precisely the false
+    positive this module exists to avoid, arrived at from the other direction:
+    not by guessing `main`, but by trusting a default that was not the base. >:[
+
+    So: score every plausible base by how far ahead the branch is, and take the
+    nearest. Ties keep the declared default. Returns (base, all_candidates).
+    """
+    seen, cands = [], []
+    for cand in ([declared] if declared else []) + list(_FALLBACK_BRANCHES):
+        if not cand or cand in seen:
+            continue
+        seen.append(cand)
+        ref = f"{remote}/{cand}"
+        if not git(path, "rev-parse", "--verify", "--quiet", ref).ok:
+            continue
+        p = git(path, "rev-list", "--left-right", "--count", f"{ref}...{branch}")
+        if not p.ok or len(p.out.split()) != 2:
+            continue
+        behind, ahead = (int(x) for x in p.out.split())
+        cands.append({"branch": cand, "ahead": ahead, "behind": behind, "declared": cand == declared})
+    if not cands:
+        return None, []
+    # Score on TOTAL divergence (ahead + behind), not `ahead` alone. Two
+    # candidates can be equally far ahead while one of them is also 3 commits
+    # behind - and a base you are behind is not a base you were cut from.
+    # Total divergence is the merge-base distance; ties keep the declared
+    # default so we never wander off it without a reason. (｡◕‿↼)
+    best = min(cands, key=lambda c: (c["ahead"] + c["behind"], c["ahead"], not c["declared"]))
+    return best["branch"], cands
+
+
 def current_branch(path: str) -> str | None:
     p = git(path, "rev-parse", "--abbrev-ref", "HEAD")
     b = p.out.strip() if p.ok else ""

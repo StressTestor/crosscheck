@@ -107,6 +107,15 @@ control not applied, success reported anyway" recurred four times across two
 independent targets (codecalc #61/#62, and two of crosscheck's own review
 blockers), and reading code catches that class only sometimes.
 
+**read-only unless the subcommand says otherwise.** Only two paths in the whole
+suite touch anything at all: `baseline` stashes and restores the tree it is
+measuring, and `gitutil.default_branch` may query the remote read-only when the
+local `<remote>/HEAD` symref is unset. There is no push, fetch, commit or
+checkout anywhere in the codebase — including in the pre-push hook, which only
+runs a check. Pointing crosscheck at a repo you have write access to cannot
+modify its remote, and `pr-branch` deliberately does not auto-fetch: a check
+that mutates your repo to make itself pass is its own bug.
+
 **the suite obeys its own rules.** `run.py` is argv-only with no `shell=True`,
 because `ci` flags shell sinks in other people's code.
 
@@ -154,7 +163,8 @@ for exactly those.
 | problem | cause | fix |
 |---------|-------|-----|
 | `cc` exits 3 saying "suite not found" | `/Volumes/T7` unmounted | mount the drive. the launcher is a stub on the main disk so this is one sentence instead of a stack trace |
-| `pr-branch` reports hundreds of stray commits | the resolved base is wrong | `git remote set-head <remote> --auto`, or pass `--base`. the tool refuses to guess `main` |
+| `pr-branch` reports hundreds of stray commits | the base is wrong | it now scores every candidate base by total divergence (ahead + behind) and says out loud when it picks one other than the declared default. override with `--base` |
+| `pr-branch` picked a base you did not expect | the repo's declared default is not what your branch was cut from | odysseus declares `dev` while contribution branches are cut from `main`. inspect `data.base_candidates` — it lists ahead/behind for every candidate |
 | `ci` finds nothing on a bad repo | no SAST installed | `pipx install zizmor==1.25.2 && brew install actionlint`, or pass `--require-sast` to make the gap loud |
 | `baseline` says INVALID on a clean tree | nothing to compare | that is correct; use `verify-change` for a committed change |
 | `baseline` refuses over a dirty submodule | `git stash` does not recurse into submodules | commit or stash inside the submodule first — the alternative is running your suite over work nothing can restore |

@@ -57,12 +57,23 @@ def check(
     if base:
         base_branch = base
     else:
-        base_branch = G.default_branch(repo, rem)
+        declared = G.default_branch(repo, rem)
+        base_branch, cands = G.plausible_base(repo, rem, branch, declared)
         if not base_branch:
             return Result.invalid(
                 CHECK,
-                f"could not resolve the default branch of remote '{rem}'",
-                f"git remote set-head {rem} --auto   (or pass --base)",
+                f"could not resolve any base branch on remote '{rem}'",
+                f"git fetch {rem}, or pass --base",
+            )
+        r.data["base_candidates"] = cands
+        if declared and base_branch != declared:
+            # Say it out loud. Silently picking a different base than the repo
+            # declares is the kind of helpfulness that hides a wrong answer.
+            near = next(c for c in cands if c["branch"] == base_branch)
+            far = next((c for c in cands if c["branch"] == declared), None)
+            r.note(
+                f"base: using {base_branch} ({near['ahead']} ahead), not the declared default "
+                f"{declared}" + (f" ({far['ahead']} ahead) - this branch is not cut from it" if far else "")
             )
 
     base_ref = f"{rem}/{base_branch}"
