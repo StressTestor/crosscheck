@@ -114,6 +114,27 @@ class TestPrBody(unittest.TestCase):
         self.assertNotEqual(r.code, EXIT_CLEAN)
         self.assertTrue(any("missing DCO sign-off" in f.what for f in r.findings), [f.what for f in r.findings])
 
+    @unittest.skipUnless(have("node"), "node not installed")
+    def test_crashed_checker_is_never_clean(self):
+        # An uncaught async throw is ordinary Actions-bot code. A dead checker
+        # is not a passing checker - and the signal was sitting in p.code.
+        with open(os.path.join(self.repo, ".github", "scripts", "check-pr-description.js"), "w") as fh:
+            fh.write(
+                "module.exports = async ({core}) => {\n"
+                "  core.setFailed('body too short');\n"
+                "  setTimeout(() => { throw new Error('late validation blew up'); }, 5);\n"
+                "};\n"
+            )
+        r = prbody.check(self.repo, self._draft("## Summary\nplenty of text here\n\nFixes #1\n"))
+        self.assertEqual(r.code, EXIT_INVALID, [f.what for f in r.findings] + r.notes)
+
+    @unittest.skipUnless(have("node"), "node not installed")
+    def test_silent_exit_zero_with_no_output_is_never_clean(self):
+        with open(os.path.join(self.repo, ".github", "scripts", "check-pr-description.js"), "w") as fh:
+            fh.write("module.exports = async () => { process.exit(0); };\n")
+        r = prbody.check(self.repo, self._draft("## Summary\nplenty of text here\n\nFixes #1\n"))
+        self.assertEqual(r.code, EXIT_INVALID, [f.what for f in r.findings] + r.notes)
+
     def test_punctuated_template_heading_is_not_falsely_missing(self):
         # "Visual / UI changes" must match when the draft copies it verbatim.
         repo = tempfile.mkdtemp()

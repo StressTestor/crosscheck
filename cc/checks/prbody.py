@@ -236,8 +236,23 @@ def check(
             r.note("SANDBOX DISABLED via --trust-repo - the repo's JS ran with your privileges")
         if p.timed_out:
             return r.fail("the repo's checker timed out")
+        # A dead checker is not a passing checker. The harness exits 0 on every
+        # path it controls, so a non-zero code means the process died - an
+        # uncaught async throw is ordinary Actions-bot code - and empty stdout
+        # means it produced no verdict at all. Either way there is nothing to
+        # read, and "nothing to read" must never reach the CLEAN path. XX
+        if p.code != 0:
+            return r.fail(
+                f"the repo's checker process exited {p.code} - it produced no verdict",
+                p.text().strip()[-400:] or "(no output)",
+            )
+        if not p.out.strip():
+            return r.fail(
+                "the repo's checker produced no output",
+                p.text().strip()[-400:] or "(no output)",
+            )
         try:
-            payload = json.loads(p.out.strip().splitlines()[-1]) if p.out.strip() else {}
+            payload = json.loads(p.out.strip().splitlines()[-1])
         except (ValueError, IndexError):
             return r.fail("could not parse harness output", p.text().strip()[:400])
 

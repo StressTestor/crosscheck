@@ -53,7 +53,7 @@ crosscheck/
   harness/
     pr_check_harness.js   # stubs github/context/core so a repo's bot runs offline
   policies/               # hand-transcribed program policy JSON (see its README)
-  tests/                  # unittest; 73 tests, real git repos and real subprocesses
+  tests/                  # unittest; 93 tests, real git repos and real subprocesses
   install.sh              # ~/.local/bin/cc launcher + optional pre-push hook
 ```
 
@@ -87,15 +87,32 @@ around within a week, and a rule routed around once is gone.
 **data over code.** `policies/` are versioned JSON. adding a program is a data
 change with a test, not a code change.
 
-**untrusted code runs sandboxed.** `pr-body` executes JavaScript out of a
-cloned repo, which for a repo you pulled to audit is attacker-controlled code.
-The checker is read as text and evaluated in a `vm` context with a
-deny-by-default `require` (only `path`/`util`/`url`/`querystring`/
-`string_decoder`), no fs, no `child_process`, stubbed `process.env` — with
-node's `--permission` model on top. Node's CommonJS loader is bypassed
-deliberately: it walks parent directories for `package.json`, so a filesystem
-allowlist tight enough to matter also breaks the load. `--trust-repo` opts out
-and says so loudly in the output.
+**untrusted code runs sandboxed — and be precise about which layer holds.**
+`pr-body` executes JavaScript out of a cloned repo, which for a repo you pulled
+an hour ago to audit is attacker-controlled code. There are two layers and they
+are **not** equally strong:
+
+| layer | what it is | does it hold? |
+|-------|-----------|---------------|
+| `node --permission` + `inherit_env=False` | OS-level: no fs writes, no `child_process`, no worker threads, and an environment containing only `PATH` and the `CC_*` values we chose | **yes** — verified surviving a full context escape |
+| the `vm` context (deny-by-default `require`, stubbed globals) | in-process | **no** — `this.constructor.constructor('return process')()` walks out in one line, and reaches the real `require` |
+
+Node's own docs say `vm` is not a security mechanism, and it was demonstrated
+against this harness. It is kept as defence in depth and as a clean error for
+honest checkers that reach too far — never as the boundary. The boundary is that
+an escape arrives somewhere with nothing worth taking.
+
+The CommonJS loader is bypassed deliberately: it walks parent directories for
+`package.json`, so a filesystem allowlist tight enough to matter also breaks the
+load.
+
+**What this means for the verdict:** a hostile checker shares the process and can
+write its own JSON to stdout and `process.exit(0)`, forging a CLEAN. In-process
+verdict integrity against hostile code is not winnable, so the suite does not
+pretend to it. **`pr-body` CLEAN on a repo you do not trust is a convenience
+result, not a safety assertion.** What is guaranteed is containment: it cannot
+write your disk, spawn processes, or read your environment. `--trust-repo` drops
+even the containment, and says so in the output.
 
 **the suite obeys its own rules.** `run.py` is argv-only with no `shell=True`,
 because `ci` flags shell sinks in other people's code.
@@ -137,6 +154,7 @@ because `ci` flags shell sinks in other people's code.
 | `pr-branch` reports hundreds of stray commits | the resolved base is wrong | `git remote set-head <remote> --auto`, or pass `--base`. the tool refuses to guess `main` |
 | `pr-body` is INVALID on a repo with a bot | node not installed | `brew install node` — without it the repo's real gate cannot run |
 | `pr-body` INVALID: "tried to require('fs')" | the repo's checker reached outside the sandbox | that checker needs more surface than a description bot should. read it before passing `--trust-repo` |
+| `pr-body` INVALID: "checker process exited N" | the repo's bot crashed (often an uncaught async throw) | read its stderr in the finding detail. a dead checker is never reported as a passing one |
 | `ci` finds nothing on a bad repo | no SAST installed | `pipx install zizmor==1.25.2 && brew install actionlint`, or pass `--require-sast` to make the gap loud |
 | `baseline` says INVALID on a clean tree | nothing to compare | that is correct; use `verify-change` for a committed change |
 | `baseline` says changes are in the stash | `git stash pop` hit a conflict | resolve it by hand; the tool reports loudly rather than swallowing it |
@@ -168,4 +186,5 @@ regression runner (ghost blocks its own tester from inside an agent).
 
 ## last updated
 
-2026-08-09 — initial build: 7 checks, 73 tests, skill + adjudicate workflow.
+2026-08-09 — initial build: 7 checks, 93 tests, skill + adjudicate workflow.
+Two adversarial review rounds applied (15 defects fixed, incl. 6 false-CLEAN paths).

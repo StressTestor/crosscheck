@@ -121,7 +121,12 @@ def check(paths: list[str], allow: list[str] | None = None, history: bool = Fals
                         )
                     )
         else:
-            total += _gitleaks_dir(os.path.dirname(ap) or ".", r)
+            # Scan the FILE, not its parent. `gitleaks dir` takes a single file
+            # fine. Scanning the parent meant `cc secrets ~/report.md` swept all
+            # of $HOME, attributed strangers' files to your run, and put their
+            # paths into a JSON envelope headed for an agent transcript - while
+            # `data.scanned` claimed only the one file. >:[
+            total += _gitleaks_dir(ap, r)
 
         # Drop findings that live in the nominated submission file - the report
         # is allowed to quote its own finding.
