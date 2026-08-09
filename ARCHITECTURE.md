@@ -50,9 +50,12 @@ crosscheck/
       vrp.py              # program eligibility BEFORE PoC effort
       enforce.py          # RUNS a local target: declared-vs-applied control parity
   policies/               # hand-transcribed program policy JSON (see its README)
+  repos/                  # per-repo branch/push POLICY, matched on remote URL.
+                          #   what the graph cannot tell you: which branch a
+                          #   given KIND of work belongs on
   specs/                  # hand-written enforce specs + fixtures (see its README)
                           #   .redruns.json = proof each control has been seen to FAIL
-  tests/                  # unittest; 137 tests, incl. suite-wide detector + provenance invariants
+  tests/                  # unittest; 139 tests, incl. suite-wide detector + provenance invariants
   install.sh              # ~/.local/bin/cc launcher + optional pre-push hook
 ```
 
@@ -95,8 +98,20 @@ never `CLEAN`. absence of a rule is not permission.
 not `INVALID`. a rule that hard-stops a pipeline on a cache age gets routed
 around within a week, and a rule routed around once is gone.
 
-**data over code.** `policies/` are versioned JSON. adding a program is a data
-change with a test, not a code change.
+**data over code.** `policies/`, `specs/` and `repos/` are versioned JSON.
+adding a program, a probe or a repo convention is a data change with a test, not
+a code change.
+
+**policy is not inferable from the graph.** git can tell you which branch you
+are ON and how far it has diverged. It cannot tell you which branch a given
+KIND of work BELONGS on — that is a rule a project states in prose, often
+somewhere a tool cannot see. odysseus's owner stated it in a chat room: `dev`
+for normal work, `main` for bigger breakage and security fixes. A pure
+divergence heuristic would happily bless a security fix cut from `dev`, because
+`dev` genuinely is nearest. So `repos/*.json` carries the transcribed rule and
+`pr-branch` prints it at the moment the base is chosen — it does **not** try to
+classify the work, because guessing "is this a security fix?" from a branch name
+is exactly the confident wrongness this suite exists to prevent.
 
 **one module executes the target, and it says so.** Every check except
 `enforce` reads artifacts and never runs the thing under test. `cc enforce`
@@ -134,6 +149,7 @@ because `ci` flags shell sinks in other people's code.
 | var | purpose |
 |-----|---------|
 | `CROSSCHECK_POLICIES` | override the `policies/` directory |
+| `CROSSCHECK_REPOS` | override the `repos/` directory (per-repo branch/push policy) |
 | `CROSSCHECK_SPECS` | override the `specs/` directory (and the red-run ledger inside it) |
 | `CROSSCHECK_PROBE_AUDIT` | override the probe audit log path (default `~/.crosscheck/probe-audit.jsonl`) |
 | `CROSSCHECK_IDENTITIES` | extra emails that count as "you" for `pr-branch` |
@@ -203,7 +219,7 @@ regression runner (ghost blocks its own tester from inside an agent).
 
 ## last updated
 
-2026-08-09 — 7 checks, 137 tests, skill + adjudicate workflow, own CI.
+2026-08-09 — 7 checks, 139 tests, skill + adjudicate workflow, own CI.
 `enforce` added after the codecalc audit showed declared-vs-applied recurring across targets.
 Four adversarial review rounds + marko applied (32 defects fixed, incl. 10 false-CLEAN
 paths, a false-INELIGIBLE in `vrp`, and one unrecoverable data-loss path in `baseline`).

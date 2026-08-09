@@ -193,6 +193,46 @@ class TestPrBranch(unittest.TestCase):
         base, _ = G.plausible_base(self.repo, "upstream", "fix/thing", "master")
         self.assertEqual(base, "master")
 
+    def test_repo_branch_policy_is_surfaced_when_transcribed(self):
+        # The git graph says which branch you ARE on. It cannot say which branch
+        # this KIND of work belongs on - that is prose a project states
+        # elsewhere. odysseus's owner: dev for normal work, main for security
+        # fixes. A divergence heuristic would bless a security fix cut from dev.
+        import json as _json
+        rd = tempfile.mkdtemp()
+        os.environ["CROSSCHECK_REPOS"] = rd
+        try:
+            url = git(self.repo, "remote", "get-url", "upstream").stdout.strip()
+            with open(os.path.join(rd, "fixture.json"), "w") as fh:
+                _json.dump({
+                    "repo": "fixture",
+                    "match": os.path.basename(url),
+                    "branch_policy": {
+                        "quote": "dev for normal work, main for security fixes",
+                        "rules": [{"base": "master", "for": "security", "note": "security fixes belong here"}],
+                    },
+                    "push_policy": {"push_to_origin": False, "note": "we push nothing here"},
+                }, fh)
+            self._commit("Me", "me@mine.tld", "mine.txt")
+            r = prbranch.check(self.repo)
+            joined = " ".join(r.notes)
+            self.assertIn("dev for normal work, main for security fixes", joined)
+            self.assertIn("security fixes belong here", joined)
+            self.assertIn("we push nothing here", joined)
+        finally:
+            os.environ.pop("CROSSCHECK_REPOS", None)
+
+    def test_no_policy_file_means_no_policy_noise(self):
+        # Discriminating: a repo with no transcribed policy must stay quiet.
+        rd = tempfile.mkdtemp()
+        os.environ["CROSSCHECK_REPOS"] = rd
+        try:
+            self._commit("Me", "me@mine.tld", "mine.txt")
+            r = prbranch.check(self.repo)
+            self.assertFalse(any("policy:" in n for n in r.notes), r.notes)
+        finally:
+            os.environ.pop("CROSSCHECK_REPOS", None)
+
     def test_not_a_repo_is_invalid(self):
         self.assertEqual(prbranch.check(tempfile.mkdtemp()).code, EXIT_INVALID)
 

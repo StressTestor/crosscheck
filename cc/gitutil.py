@@ -104,6 +104,54 @@ def plausible_base(path: str, remote: str, branch: str, declared: str | None) ->
     return best["branch"], cands
 
 
+_REPO_DIR_ENV = "CROSSCHECK_REPOS"
+_DEFAULT_REPO_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "repos"
+)
+
+
+def repo_dir() -> str:
+    return os.environ.get(_REPO_DIR_ENV) or _DEFAULT_REPO_DIR
+
+
+def remote_url(path: str, remote: str) -> str:
+    p = git(path, "remote", "get-url", remote)
+    return p.out.strip() if p.ok else ""
+
+
+def repo_policy(path: str, remote: str) -> dict | None:
+    """Hand-transcribed per-repo branch policy, matched on the remote URL.
+
+    The git graph can tell you which branch you ARE on. It cannot tell you which
+    branch this KIND of work belongs on - that is a decision a project states in
+    prose, somewhere the tool cannot see. odysseus's owner put it in a chat
+    room: dev for normal work, main for security fixes and narrow hotfixes. A
+    divergence heuristic will happily bless a security fix cut from dev, because
+    dev is genuinely nearest. So the policy is data, and we surface it at the
+    moment the base is chosen. (｡◕‿↼)
+    """
+    import json as _json
+
+    url = remote_url(path, remote)
+    if not url:
+        return None
+    d = repo_dir()
+    if not os.path.isdir(d):
+        return None
+    for fn in sorted(os.listdir(d)):
+        if not fn.endswith(".json") or fn.startswith("_"):
+            continue
+        try:
+            with open(os.path.join(d, fn), "r", encoding="utf-8") as fh:
+                pol = _json.load(fh)
+        except (OSError, ValueError):
+            continue
+        m = pol.get("match", "")
+        if m and m in url:
+            return pol
+    return None
+
+
 def current_branch(path: str) -> str | None:
     p = git(path, "rev-parse", "--abbrev-ref", "HEAD")
     b = p.out.strip() if p.ok else ""

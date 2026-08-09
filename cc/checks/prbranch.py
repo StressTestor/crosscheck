@@ -72,9 +72,10 @@ def check(
             near = next(c for c in cands if c["branch"] == base_branch)
             far = next((c for c in cands if c["branch"] == declared), None)
             # Informative, not accusatory. A repo running two long-lived
-            # branches (odysseus: `dev` for maintainer work, `main` for
-            # contributions) is a normal setup, not a misconfiguration - the
-            # declared default is simply not the base for THIS branch.
+            # branches is a normal setup, not a misconfiguration - the declared
+            # default is simply not the base for THIS branch. Which branch a
+            # given kind of work BELONGS on is policy, not graph shape, so it
+            # comes from repos/*.json below rather than being inferred here.
             detail = f"{base_branch} is {near['ahead']} ahead / {near['behind']} behind"
             if far:
                 detail += f"; declared default {declared} is {far['ahead']} ahead / {far['behind']} behind"
@@ -89,6 +90,22 @@ def check(
         )
 
     r.data.update({"branch": branch, "remote": rem, "base": base_ref})
+
+    # Surface the project's own stated branch policy, if we have it transcribed.
+    # We do NOT try to classify the work - guessing "is this a security fix?"
+    # from a branch name is exactly the kind of confident wrongness this suite
+    # exists to avoid. Print the rule and let the human match it.
+    pol = G.repo_policy(repo, rem)
+    if pol:
+        bp = pol.get("branch_policy") or {}
+        r.data["branch_policy"] = bp
+        if bp.get("quote"):
+            r.note(f"{pol.get('repo', 'repo')} policy: {bp['quote']}")
+        for rule in bp.get("rules", []) or []:
+            if rule.get("base") == base_branch and rule.get("note"):
+                r.note(f"you are on {base_branch} - {rule['note']}")
+        if (pol.get("push_policy") or {}).get("push_to_origin") is False:
+            r.note(f"push policy: {pol['push_policy'].get('note', 'do not push to this remote')}")
 
     commits = G.commits_ahead(repo, branch, base_ref)
     if commits is None:

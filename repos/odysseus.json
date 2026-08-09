@@ -1,0 +1,33 @@
+{
+  "_provenance": "Stated by the repo owner in the odysseus maintainers Matrix room, 2026-07-15. Transcribed from the local digest at ~/.matrix-reader/digest/maintainers.md. This is policy, not inference from the git graph - the graph alone cannot tell you WHICH branch a given kind of work belongs on.",
+  "repo": "odysseus",
+  "match": "odysseus-dev/odysseus",
+
+  "branch_policy": {
+    "default_working_branch": "dev",
+    "conservative_branch": "main",
+    "quote": "Use dev as normal working branch and main as conservative. Touch main for bigger breakage and security fixes / narrow hotfix work.",
+    "rules": [
+      {
+        "base": "dev",
+        "for": "normal working changes",
+        "note": "dev is the day-to-day branch and the repo's declared default"
+      },
+      {
+        "base": "main",
+        "for": "bigger breakage, security fixes, narrow hotfix work",
+        "note": "security fixes belong on main, NOT on dev - being based on main is correct here, not a mistake"
+      }
+    ],
+    "sensitive_flow": {
+      "applies_to": "P0 and sensitive P1",
+      "rule": "private branch flow - GHSA advisory plus a temporary private fork, not a public PR",
+      "note": "everything less sensitive stays a normal PR; blanket-applying the private flow was rejected as too much churn"
+    }
+  },
+
+  "push_policy": {
+    "push_to_origin": false,
+    "note": "this clone's origin IS the org repo (no fork remote) and Joe has push+triage, so a plain push lands upstream. We push NOTHING here."
+  }
+}
