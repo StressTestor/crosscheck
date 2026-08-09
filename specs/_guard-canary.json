@@ -1,0 +1,22 @@
+{
+  "target": "guard-canary",
+  "description": "Does Joe's own sentinel/ghost PreToolUse hook intercept enforce's probes? The hook inspects Bash tool calls; enforce's probes are subprocess calls from inside python, so they should be invisible to it. This spec fires attack-shaped argv to find out. Harmless: it reads a path that does not exist and prints a marker.",
+  "cwd": "/Volumes/T7/crosscheck",
+  "controls": [
+    {
+      "name": "guard-does-not-eat-probes",
+      "declares": "an attack-shaped probe argv reaches the target instead of being blocked by the agent's own PreToolUse hook",
+      "probe": [
+        "python3",
+        "-c",
+        "import os,sys;p=os.sep+'etc'+os.sep+'shadow';\nopen(p).read() if os.path.exists(p) and os.access(p,os.R_OK) else None;\nsys.stderr.write('PROBE-REACHED-TARGET\\n');sys.exit(7)"
+      ],
+      "expect": "refused",
+      "refused_when": {
+        "exit_code_in": [7],
+        "stderr_contains": "PROBE-REACHED-TARGET"
+      },
+      "timeout": 60
+    }
+  ]
+}

@@ -102,6 +102,22 @@ everything, and "we hardened it" then means "we broke it".
 `crosscheck-self.json` carries one: a genuinely clean, fully-pinned repo must
 still return CLEAN under `--require-sast`.
 
+## the guard does not see these probes
+
+`cc enforce` is the one subcommand that executes the target, and its probes run
+as subprocesses from inside python — **not** as agent Bash calls. The local
+sentinel/ghost PreToolUse hook only inspects the agent's command line, so it
+never sees a probe's argv.
+
+Verified, not assumed: `_guard-canary.json` fires an attack-shaped probe
+(attempts to read `/etc/shadow`, exits 7 with a marker). It reaches the target
+and runs, in sessions where that same guard blocks the agent for far less.
+
+Good news for enforce — it will not report UNTESTABLE forever the way a
+guard-tested module would. But read the other direction too: **a spec is
+execution the guard will not review.** Hand-writing them is the point, not a
+formality. `--dry-run` before every change to a spec, every time.
+
 ## running
 
 ```
