@@ -50,9 +50,29 @@ real test once the rule named the specific signal:
 }
 ```
 
-**Always prove a new spec goes red.** Break the control on a throwaway copy and
-confirm the verdict flips to UNENFORCED. A spec that has never failed is a spec
-you have not tested.
+**This is now a machine check, not a rule you have to remember.** A control
+whose verdict is ENFORCED but which has never been *seen to fail* reports
+`JUDGMENT (4)`, not CLEAN — because a refusal rule that has only ever passed may
+be matching for an unrelated reason.
+
+To prove one, break the control on a throwaway copy and run:
+
+```
+cc enforce <name> --record-red
+```
+
+Any control that comes back UNENFORCED there is recorded in `specs/.redruns.json`,
+keyed by a fingerprint of `name + probe + refused_when + expect`. Editing the
+refusal rule changes the fingerprint and invalidates the proof, which is the
+point. Editing an unrelated control does not.
+
+The ledger is a **discipline record, not a security boundary** — anyone who can
+edit a spec can edit it. It exists to stop honest mistakes, which is exactly the
+class of mistake that shipped here first.
+
+Why a check and not a paragraph: the original mitigation for this WAS a
+paragraph, and a documentation requirement is the same shape as every
+mitigation that quietly stops happening by week two.
 
 ## format
 

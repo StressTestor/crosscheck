@@ -114,6 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--only", action="append", default=[], help="run only these control names")
     e.add_argument("--dry-run", action="store_true", help="print the probes without executing them")
     e.add_argument("--timeout", type=int, default=120)
+    e.add_argument("--record-red", action="store_true", help="record controls that FAIL here as proven-discriminating (run against a deliberately broken target)")
 
     d = sub.add_parser("decay", help="which checks have not fired - delete them")
     d.add_argument("--days", type=int, default=60)
@@ -140,7 +141,7 @@ def dispatch(a) -> list[Result]:
     if a.cmd == "vrp":
         return [vrp.check(a.program, a.vuln_class, a.max_age_days)]
     if a.cmd == "enforce":
-        return [enforce.check(a.spec, a.only, a.dry_run, a.timeout)]
+        return [enforce.check(a.spec, a.only, a.dry_run, a.timeout, a.record_red)]
     if a.cmd == "run":
         return run_profile(a)
     raise ValueError(a.cmd)

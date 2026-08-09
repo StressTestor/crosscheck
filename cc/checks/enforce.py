@@ -55,6 +55,7 @@ Judgment calls:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 
@@ -76,6 +77,62 @@ UNTESTABLE = "UNTESTABLE"
 
 def spec_dir() -> str:
     return os.environ.get(SPEC_DIR_ENV) or _DEFAULT_SPEC_DIR
+
+
+def ledger_path() -> str:
+    return os.path.join(spec_dir(), ".redruns.json")
+
+
+def control_fingerprint(control: dict) -> str:
+    """Hash the parts of a control that decide its verdict.
+
+    Keyed on name + probe + refused_when + expect, NOT the whole spec, so
+    editing an unrelated control does not invalidate this one's proof.
+    """
+    payload = json.dumps(
+        {
+            "name": control.get("name"),
+            "probe": control.get("probe"),
+            "refused_when": control.get("refused_when"),
+            "expect": control.get("expect", "refused"),
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+def _load_ledger() -> dict:
+    try:
+        with open(ledger_path(), "r", encoding="utf-8") as fh:
+            return json.load(fh) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _record_red(control: dict, verdict: str) -> None:
+    """Remember that this exact control has been SEEN TO FAIL.
+
+    A control that has never gone red is a control nobody has tested. The
+    first spec in this repo reported ENFORCED against a deliberately broken
+    build because its refusal rule matched for an unrelated reason - and the
+    mitigation shipped as a paragraph in a README, which is the same shape as
+    every mitigation that quietly stops happening by week two. So it is a
+    machine check now. (¬‿¬)
+
+    This is a discipline ledger, not a security boundary: anyone who can edit
+    the spec can edit this. It exists to stop honest mistakes, and it says so.
+    """
+    led = _load_ledger()
+    led[control_fingerprint(control)] = {
+        "name": control.get("name"),
+        "verdict": verdict,
+    }
+    try:
+        os.makedirs(os.path.dirname(ledger_path()), exist_ok=True)
+        with open(ledger_path(), "w", encoding="utf-8") as fh:
+            json.dump(led, fh, indent=2, sort_keys=True)
+    except OSError:
+        pass
 
 
 def load_spec(path_or_name: str) -> tuple[dict | None, str | None]:
@@ -198,6 +255,7 @@ def check(
     only: list[str] | None = None,
     dry_run: bool = False,
     timeout: int = 120,
+    record_red: bool = False,
 ) -> Result:
     r = Result(check=CHECK)
 
@@ -225,6 +283,7 @@ def check(
 
     wanted = set(only or [])
     verdicts = {}
+    ledger = _load_ledger()
 
     for control in controls:
         name = control.get("name") or "(unnamed)"
@@ -280,7 +339,26 @@ def check(
 
         if held:
             verdicts[name] = ENFORCED
-            r.note(f"{ENFORCED}  {name} - {declares or 'control holds'}")
+            if control_fingerprint(control) in ledger:
+                r.note(f"{ENFORCED}  {name} - {declares or 'control holds'}")
+            else:
+                # An ENFORCED from a control never seen to fail is not evidence.
+                # This is the bug that shipped in this repo's first spec, and a
+                # README paragraph is not a check. >:[
+                r.add(
+                    Finding(
+                        what=f"{name}: ENFORCED, but this control has never been seen to FAIL",
+                        detail=(
+                            "a refusal rule that has only ever passed may be matching for an "
+                            "unrelated reason - the first spec in this repo did exactly that"
+                        ),
+                        fix=(
+                            "break the control on a throwaway copy and re-run with --record-red, "
+                            "then this verdict counts"
+                        ),
+                        severity="judgment",
+                    )
+                )
             continue
 
         claims, claim_note = _claims_applied(control, p, cwd)
@@ -298,6 +376,10 @@ def check(
                 )
             )
             continue
+
+        if record_red:
+            _record_red(control, UNENFORCED_SILENT if claims is True else UNENFORCED)
+            r.note(f"recorded red run for {name} - its ENFORCED verdicts now count")
 
         if claims is True:
             verdicts[name] = UNENFORCED_SILENT

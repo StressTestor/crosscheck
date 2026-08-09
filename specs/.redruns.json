@@ -1,0 +1,6 @@
+{
+  "d5428d1dd8a16a57": {
+    "name": "sast-not-credited-without-analysis",
+    "verdict": "UNENFORCED"
+  }
+}

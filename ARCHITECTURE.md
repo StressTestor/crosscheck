@@ -55,7 +55,7 @@ crosscheck/
     pr_check_harness.js   # stubs github/context/core so a repo's bot runs offline
   policies/               # hand-transcribed program policy JSON (see its README)
   specs/                  # hand-written enforce specs + fixtures (see its README)
-  tests/                  # unittest; 118 tests, real git repos and real subprocesses
+  tests/                  # unittest; 122 tests, real git repos and real subprocesses
   install.sh              # ~/.local/bin/cc launcher + optional pre-push hook
 ```
 
@@ -173,7 +173,7 @@ because `ci` flags shell sinks in other people's code.
 | `baseline` says changes are in the stash | `git stash pop` hit a conflict | resolve it by hand; the tool reports loudly rather than swallowing it |
 | `scope`/`vrp` INVALID for a program | no policy file | `cp policies/_template.json policies/<program>.json` and transcribe by hand |
 | `cc enforce` says UNTESTABLE | the spec has no `refused_when`, or it did not resolve | a refusal must be recognisable; exit code alone is not enough |
-| an `enforce` spec passes but never fails | the refusal rule matches for an unrelated reason | break the control on a throwaway copy and confirm it flips to UNENFORCED. see `specs/README.md` |
+| `enforce` says ENFORCED but exits JUDGMENT | that control has never been seen to FAIL, so its rule is unproven | break it on a throwaway copy and `cc enforce <spec> --record-red`. see `specs/README.md` |
 | a `vrp` ruling looks wrong | policy is a hand transcript | every ruling prints its source quote — check the transcription, then the page |
 | actionlint noise about "no project found" | actionlint talking about itself outside a repo | already filtered; only `file:line:col:` findings are reported |
 

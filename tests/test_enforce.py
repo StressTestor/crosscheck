@@ -12,7 +12,7 @@ import tempfile
 import unittest
 
 from cc.checks import enforce
-from cc.result import EXIT_CLEAN, EXIT_FINDING, EXIT_INVALID
+from cc.result import EXIT_CLEAN, EXIT_FINDING, EXIT_INVALID, EXIT_JUDGMENT
 
 # A target that refuses the probe and reports honestly.
 TARGET_ENFORCED = """#!/bin/sh
@@ -77,14 +77,19 @@ class TestEnforce(unittest.TestCase):
         c.update(over)
         return c
 
-    def test_enforced_control_is_clean(self):
+    def test_enforced_verdict_is_reached_but_unproven_until_a_red_run(self):
+        # The control genuinely refuses, so the VERDICT is ENFORCED - but the
+        # exit code stays JUDGMENT until the rule has been seen to go red,
+        # because a rule that only ever passed may be matching for an
+        # unrelated reason. Both halves are asserted on purpose.
         t = self._target(TARGET_ENFORCED)
         c = self._nproc_control(t)
         c["self_report"] = {"from": "stdout_json", "path": "unenforced",
                             "claims_applied_when": "absent_from", "key": "nproc"}
         r = enforce.check(self._spec(c))
-        self.assertEqual(r.code, EXIT_CLEAN, [f.what for f in r.findings])
         self.assertEqual(r.data["verdicts"]["nproc"], enforce.ENFORCED)
+        self.assertEqual(r.code, EXIT_JUDGMENT)
+        self.assertTrue(any("never been seen to FAIL" in f.what for f in r.findings))
 
     def test_unenforced_but_honest_is_a_finding(self):
         t = self._target(TARGET_UNENFORCED_HONEST)
@@ -146,6 +151,56 @@ class TestEnforce(unittest.TestCase):
         r = enforce.check(self._spec(self._nproc_control(t)), dry_run=True)
         self.assertFalse(os.path.exists(marker), "dry-run fired the probe")
         self.assertTrue(any("WOULD RUN" in n for n in r.notes), r.notes)
+
+    def test_enforced_without_a_recorded_red_run_is_not_trusted(self):
+        # The failure this repo actually shipped: a refusal rule that has only
+        # ever passed may be matching for an unrelated reason. A README
+        # paragraph is not a check, so this is one.
+        t = self._target(TARGET_ENFORCED)
+        c = self._nproc_control(t)
+        c["self_report"] = {}
+        r = enforce.check(self._spec(c))
+        self.assertNotEqual(r.code, EXIT_CLEAN)
+        self.assertTrue(
+            any("never been seen to FAIL" in f.what for f in r.findings),
+            [f.what for f in r.findings],
+        )
+
+    def test_recording_a_red_run_makes_the_verdict_count(self):
+        # Round trip: prove it goes red against a broken target, then the same
+        # control's ENFORCED on a working target is trusted.
+        broken = self._target(TARGET_UNENFORCED_HONEST, name="broken.sh")
+        c_broken = self._nproc_control(broken)
+        c_broken["self_report"] = {}
+        red = enforce.check(self._spec(c_broken, name="red"), record_red=True)
+        self.assertEqual(red.data["verdicts"]["nproc"], enforce.UNENFORCED)
+
+        # Same probe argv + rule, now against a target that refuses.
+        good = self._target(TARGET_ENFORCED, name="broken.sh")  # overwrite, same path
+        c_good = self._nproc_control(good)
+        c_good["self_report"] = {}
+        self.assertEqual(
+            enforce.control_fingerprint(c_broken),
+            enforce.control_fingerprint(c_good),
+            "fingerprint must not depend on target behaviour",
+        )
+        r = enforce.check(self._spec(c_good, name="good"))
+        self.assertEqual(r.code, EXIT_CLEAN, [f.what for f in r.findings])
+
+    def test_fingerprint_changes_when_the_refusal_rule_changes(self):
+        # Editing the rule invalidates the proof - that is the point.
+        t = self._target(TARGET_ENFORCED)
+        a = self._nproc_control(t)
+        b = self._nproc_control(t)
+        b["refused_when"] = {"exit_code_not_in": [0], "stderr_contains": "refused"}
+        self.assertNotEqual(enforce.control_fingerprint(a), enforce.control_fingerprint(b))
+
+    def test_fingerprint_ignores_unrelated_controls(self):
+        t = self._target(TARGET_ENFORCED)
+        a = self._nproc_control(t)
+        b = self._nproc_control(t)
+        b["declares"] = "totally different prose"
+        self.assertEqual(enforce.control_fingerprint(a), enforce.control_fingerprint(b))
 
     def test_missing_spec_is_invalid(self):
         self.assertEqual(enforce.check("nope").code, EXIT_INVALID)
