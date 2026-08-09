@@ -1,0 +1,17 @@
+{
+  "_comment": "Copy to <program>.json and transcribe from the program page BY HAND. Every field you leave empty is a question crosscheck will answer with JUDGMENT (ask a human) rather than CLEAN. That is deliberate: a fabricated policy is worse than no policy.",
+  "program": "<h1/bugcrowd handle>",
+  "policy_url": "https://hackerone.com/<program>/policy_scopes",
+  "fetched_at": "YYYY-MM-DD",
+  "in_scope": ["example.com", "*.example.io"],
+  "out_of_scope": ["blog.example.com"],
+  "severity_bar": "e.g. 'high+ only' or 'moderate and above' - quote the page",
+  "eligible_classes": ["ssrf", "idor"],
+  "below_bar_classes": ["denial of service"],
+  "ineligible_classes": [
+    {"class": "self-xss", "quote": "paste the exact sentence from the policy page"}
+  ],
+  "exclusion_windows": [
+    {"from": "YYYY-MM-DD", "until": "YYYY-MM-DD", "classes": ["dns"], "quote": "paste the exact sentence"}
+  ]
+}
