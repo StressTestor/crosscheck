@@ -154,68 +154,65 @@ def check(
     sast_ran = []
     if wfs and have("actionlint"):
         p = run(["actionlint", "-no-color", "-oneline"], cwd=repo, timeout=180)
-        # A scanner only counts as having RUN if it actually analyzed the
+        # A scanner counts as having RUN only if it actually analyzed the
         # workflows. Crediting a timeout - or a config error - suppressed both
         # --require-sast and the no-SAST fallback, and the audited repo owns
         # `.github/actionlint.yaml`, so a repo could ship one junk config file
-        # and buy itself a CLEAN. The input disabling the audit must never come
-        # from the thing being audited. 💀
+        # and buy itself a CLEAN. The input that disables an audit must never
+        # come from the thing being audited. 💀
         #
         # actionlint exits 3 for BOTH real findings and "no project was found",
-        # so the exit code cannot decide this; the output has to.
-        al_findings = [ln.strip() for ln in p.text().splitlines() if _ACTIONLINT_RE.match(ln.strip())]
+        # so the exit code cannot decide this. The output has to. Findings match
+        # `file:line:col: message`; anything else on that stream is actionlint
+        # talking about itself, and reporting THAT as a security finding is how
+        # a tool earns a mute.
+        lines = [] if p.timed_out else [ln.strip() for ln in p.text().splitlines() if ln.strip()]
+        al_findings = [ln for ln in lines if _ACTIONLINT_RE.match(ln)]
         al_self = [
-            ln.strip() for ln in p.text().splitlines()
-            if "no project was found" in ln or "could not parse" in ln or ln.strip().startswith("actionlint:")
+            ln for ln in lines
+            if "no project was found" in ln or "could not parse" in ln or ln.startswith("actionlint:")
         ]
+
         if p.timed_out:
             r.note("actionlint timed out - NOT counted as a scanner that ran")
         elif al_findings or (p.code == 0 and not al_self):
             sast_ran.append("actionlint")
+            for ln in al_findings:
+                r.add(
+                    Finding(
+                        what="actionlint reported a workflow issue",
+                        where=_ACTIONLINT_RE.match(ln).group(1),
+                    ).with_foreign("actionlint", ln)
+                )
         else:
-            # Not credited. The verdict is carried by sast_ran staying empty,
-            # which drives the judgment Finding / --require-sast gate below -
-            # so a repo cannot disable the audit by shipping a junk config,
-            # and a plain non-git directory does not become a hard error.
+            # Not credited, and said ONCE. sast_ran staying empty is what
+            # carries the verdict into the judgment Finding / --require-sast
+            # gate below, so a junk config cannot buy a clean result - while a
+            # plain non-git directory does not become a hard error.
             r.note(
                 f"actionlint exited {p.code} WITHOUT linting: "
                 + ((al_self[0] if al_self else p.text().strip()[-200:]) or "(no output)")
             )
-        # actionlint exits 1 when it has findings; that is data, not an error.
-        # But its OWN diagnostics ("no project was found in any parent
-        # directories...") come out on the same stream, and reporting those as
-        # security findings is how a tool earns a mute. Only accept the real
-        # `file:line:col: message` shape. XX
-        saw_real = False
-        for ln in ([] if p.timed_out else p.text().splitlines()):
-            ln = ln.strip()
-            if not ln:
-                continue
-            m = _ACTIONLINT_RE.match(ln)
-            if m:
-                saw_real = True
-                r.add(
-                    Finding(
-                        what="actionlint reported a workflow issue",
-                        where=m.group(1),
-                    ).with_foreign("actionlint", ln)
-                )
-            elif "no project was found" in ln or ln.startswith("actionlint:"):
-                r.note(f"actionlint: {ln}")
-        if not saw_real and p.code not in (0, 1):
-            r.note(f"actionlint exited {p.code} with no parseable findings")
+
     if wfs and have("zizmor"):
         p = run(
-            ["zizmor", "--offline", "--min-severity=low", "--format=plain", ".github/workflows/"],
+            # --no-exit-codes: without it zizmor encodes the HIGHEST FINDING
+            # SEVERITY in its exit status (13 low, 14 medium/high, ...), so a
+            # gate written as `code in (0, 14)` silently discards every
+            # low-severity finding. With it, 0 means "the audit ran" and
+            # non-zero means "fatal: no audit was performed" - which is the
+            # only distinction this gate actually needs. XX
+            ["zizmor", "--offline", "--min-severity=low", "--format=plain",
+             "--no-exit-codes", ".github/workflows/"],
             cwd=repo,
             timeout=300,
         )
-        # zizmor: 0 = clean, 14 = findings. Anything else (1 = invalid config,
-        # which the AUDITED repo controls via .github/zizmor.yml) means it did
-        # not scan, and must not be credited as a scanner that ran.
+        # With --no-exit-codes: 0 = the audit ran, non-zero = it did not (a
+        # malformed .github/zizmor.yml, which the AUDITED repo controls, is the
+        # case that matters). Never credit a scanner that analyzed nothing.
         if p.timed_out:
             r.note("zizmor timed out - NOT counted as a scanner that ran")
-        elif p.code in (0, 14):
+        elif p.code == 0:
             sast_ran.append("zizmor")
             # Parse in the RAN branch. This loop briefly lived under `else`,
             # which meant findings were read only when zizmor FAILED and

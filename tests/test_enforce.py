@@ -252,6 +252,17 @@ class TestEnforce(unittest.TestCase):
         finally:
             os.environ.pop(enforce.AUDIT_LOG_ENV, None)
 
+    def test_pinned_allowed_controls_can_also_be_proven(self):
+        # The expect:allowed branch used to `continue` past the recorder, so a
+        # pinned negative could never be proven and reported unproven forever.
+        t = self._target(TARGET_ENFORCED)
+        c = self._nproc_control(t)
+        c["expect"] = "allowed"
+        c["self_report"] = {}
+        r = enforce.check(self._spec(c, name="al"), record_red=True)
+        self.assertEqual(r.data["verdicts"]["nproc"], enforce.UNENFORCED)
+        self.assertIn(enforce.control_fingerprint(c), enforce._load_ledger())
+
     def test_missing_spec_is_invalid(self):
         self.assertEqual(enforce.check("nope").code, EXIT_INVALID)
 

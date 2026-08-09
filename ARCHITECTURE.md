@@ -21,7 +21,6 @@ against the machine. what shipped is what survived both.
 | language | Python | 3.11+ (developed on 3.14.6) |
 | deps | stdlib only | — |
 | tests | unittest | stdlib |
-| optional: PR-bot harness | node | any modern |
 | optional: Actions SAST | zizmor / actionlint | 1.25.2 / 1.7.12 |
 | optional: dep advisories | pip-audit / npm | 2.10.0 / any |
 | optional: secret scanning | gitleaks | any |
@@ -53,7 +52,7 @@ crosscheck/
   policies/               # hand-transcribed program policy JSON (see its README)
   specs/                  # hand-written enforce specs + fixtures (see its README)
                           #   .redruns.json = proof each control has been seen to FAIL
-  tests/                  # unittest; 123 tests, real git repos and real subprocesses
+  tests/                  # unittest; 134 tests, incl. suite-wide detector + provenance invariants
   install.sh              # ~/.local/bin/cc launcher + optional pre-push hook
 ```
 
@@ -83,8 +82,10 @@ worst-of aggregation is `3 > 2 > 4 > 0` — INVALID is loudest because a check
 that could not run prints the same nothing as a clean one.
 
 **delegate, don't reimplement.** zizmor/actionlint own Actions semantics,
-gitleaks owns secret detection, the target repo's own bot owns PR-description
-rules. crosscheck's value is aiming them and reading exit codes correctly.
+gitleaks owns secret detection, pip-audit/npm own dependency advisories.
+crosscheck's value is aiming them at the things nobody aims them at, and
+reading their exit codes honestly — including refusing to credit one that
+analyzed nothing.
 
 **never guess in the permissive direction.** no policy for a program is
 `INVALID`, never "probably in scope". an unknown vuln class is `JUDGMENT`,
@@ -138,6 +139,16 @@ because `ci` flags shell sinks in other people's code.
 | list checks | `cc checks` |
 | find dead checks | `cc decay` |
 
+## CI
+
+`.github/workflows/ci.yml`. Runs the suite on python 3.11 and 3.13 (proving the
+floor this doc claims rather than asserting it), then points crosscheck at
+itself: `cc ci . --require-sast`, `cc secrets . --history`, and a step that
+**requires the deliberately-bad fixture under `specs/fixtures/` to still fail**
+— a self-audit that only ever passes proves nothing. Actions are pinned to full
+SHAs and the token starts at `permissions: {}`, because this repo flags others
+for exactly those.
+
 ## gotchas
 
 | problem | cause | fix |
@@ -180,7 +191,7 @@ regression runner (ghost blocks its own tester from inside an agent).
 
 ## last updated
 
-2026-08-09 — 7 checks, 123 tests, skill + adjudicate workflow.
+2026-08-09 — 7 checks, 134 tests, skill + adjudicate workflow, own CI.
 `enforce` added after the codecalc audit showed declared-vs-applied recurring across targets.
 Four adversarial review rounds + marko applied (32 defects fixed, incl. 10 false-CLEAN
 paths, a false-INELIGIBLE in `vrp`, and one unrecoverable data-loss path in `baseline`).

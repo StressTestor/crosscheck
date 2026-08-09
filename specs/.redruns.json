@@ -1,5 +1,9 @@
 {
-  "d5428d1dd8a16a57": {
+  "c1028532ae65ebc7": {
+    "name": "clean-repo-still-passes",
+    "verdict": "UNENFORCED"
+  },
+  "d19ac565b61c30fe": {
     "name": "sast-not-credited-without-analysis",
     "verdict": "UNENFORCED"
   }

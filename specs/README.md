@@ -66,6 +66,10 @@ keyed by a fingerprint of `name + probe + refused_when + expect`. Editing the
 refusal rule changes the fingerprint and invalidates the proof, which is the
 point. Editing an unrelated control does not.
 
+Prune stale entries when you change a rule: a proof recorded against an old
+`refused_when` would otherwise bless that rule again if someone reverted it.
+Fingerprints not present in any current spec are dead weight at best.
+
 The ledger is a **discipline record, not a security boundary** — anyone who can
 edit a spec can edit it. It exists to stop honest mistakes, which is exactly the
 class of mistake that shipped here first.

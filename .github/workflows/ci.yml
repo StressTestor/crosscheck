@@ -1,0 +1,101 @@
+# CI for crosscheck.
+#
+# A tool that audits other people's CI and has none of its own is a bad joke, so
+# this runs the suite AND points crosscheck at itself. The self-audit is not
+# decoration: `cc ci --require-sast` on this repo is the same code path that
+# audits odysseus, and a regression in it fails here first.
+#
+# Pins are full commit SHAs (the thing `cc ci` flags others for), and the token
+# starts at zero scope.
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Default-deny. Each job opts in to only what it needs.
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: tests (python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is the floor ARCHITECTURE.md claims; prove it, do not assert it.
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Run the suite
+        run: python3 -m unittest discover -s tests -t . -v
+
+  self-audit:
+    name: crosscheck audits crosscheck
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.13"
+
+      # Same pins odysseus CI uses, so a local run reproduces this verdict.
+      - name: Install the scanners cc ci delegates to
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet zizmor==1.25.2
+          ACTIONLINT_VERSION=1.7.12
+          ACTIONLINT_SHA256=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          TARBALL="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "${TARBALL}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${TARBALL}"
+          echo "${ACTIONLINT_SHA256}  ${TARBALL}" | sha256sum -c -
+          tar -xzf "${TARBALL}" actionlint
+          sudo install -m755 actionlint /usr/local/bin/actionlint
+
+      # --require-sast so a scanner that fails to run is INVALID, never a
+      # silent pass. Excludes the deliberately-broken fixture under specs/.
+      - name: cc ci on itself
+        run: python3 crosscheck.py ci . --require-sast --no-audit
+
+      - name: cc secrets on the tree and its history
+        run: |
+          set -euo pipefail
+          GITLEAKS_VERSION=8.30.1
+          TARBALL="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL -o "${TARBALL}" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${TARBALL}"
+          tar -xzf "${TARBALL}" gitleaks
+          sudo install -m755 gitleaks /usr/local/bin/gitleaks
+          python3 crosscheck.py secrets . --history
+
+      # The fixture under specs/ is deliberately vulnerable. Prove cc ci still
+      # flags it - a self-audit that only ever passes proves nothing.
+      - name: the deliberately-bad fixture must still fail
+        run: |
+          set -euo pipefail
+          if python3 crosscheck.py ci specs/fixtures/junk-sast-config --require-sast --no-audit; then
+            echo "::error::cc ci passed a fixture built to fail it - the detector has gone dark"
+            exit 1
+          fi

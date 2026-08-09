@@ -5,7 +5,7 @@
   "controls": [
     {
       "name": "sast-not-credited-without-analysis",
-      "declares": "cc ci --require-sast must not report CLEAN when zizmor/actionlint exit without analyzing, even though the audited repo owns their config files",
+      "declares": "a scanner that exits WITHOUT analyzing is never credited as having run, even though the audited repo owns its config file (.github/zizmor.yml)",
       "probe": [
         "python3",
         "crosscheck.py",
@@ -19,7 +19,7 @@
         "exit_code_not_in": [
           0
         ],
-        "output_contains": "no Actions SAST produced an analysis"
+        "output_contains": "zizmor exited 1 WITHOUT scanning"
       },
       "timeout": 300
     },
@@ -42,5 +42,6 @@
       },
       "timeout": 400
     }
-  ]
+  ],
+  "_note": "The fixture disables zizmor only. actionlint resolves its config from the GIT PROJECT root, so once this fixture was committed inside the crosscheck repo it stopped breaking actionlint - found by cc enforce running against the real tree. The control now asserts the credit-gate itself rather than the whole-command verdict."
 }

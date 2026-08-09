@@ -477,6 +477,14 @@ def check(
         if claim_note:
             r.note(f"{name}: {claim_note}")
 
+        # Record the red HERE - before the expect:allowed branch, which used to
+        # `continue` past the recorder and left pinned-negative controls
+        # permanently unprovable. Any outcome where the control did not hold is
+        # a red run, whichever direction it was pinned in. >:[
+        if record_red:
+            _record_red(control, UNENFORCED_SILENT if claims is True else UNENFORCED)
+            r.note(f"recorded red run for {name} - its ENFORCED verdicts now count")
+
         if expect == "allowed":
             # A pinned negative broke: a legitimate operation is now refused.
             verdicts[name] = UNENFORCED
@@ -488,10 +496,6 @@ def check(
                 )
             )
             continue
-
-        if record_red:
-            _record_red(control, UNENFORCED_SILENT if claims is True else UNENFORCED)
-            r.note(f"recorded red run for {name} - its ENFORCED verdicts now count")
 
         if claims is True:
             verdicts[name] = UNENFORCED_SILENT
