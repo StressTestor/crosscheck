@@ -79,7 +79,11 @@ def host_matches(host: str, entry: str) -> bool:
 # filenames, so it is not always a hand-typed literal - and `../../etc/x`
 # would load an arbitrary json as an authoritative scope policy. Anything but
 # a plain name is refused outright. (¬‿¬)
-_PROGRAM_RE = re.compile(r"^[a-z0-9][a-z0-9_.\-]*$")
+# A leading underscore is allowed - `_template` / `_example-eero` are the
+# documented names for the non-program files, and rejecting them made the
+# shipped examples unloadable. Safety here comes from refusing separators and
+# `..`, not from the first character.
+_PROGRAM_RE = re.compile(r"^[a-z0-9_][a-z0-9_.\-]*$")
 
 
 def load_policy(program: str) -> tuple[dict | None, str | None]:

@@ -41,10 +41,24 @@ def _p(path: str) -> str:
     return os.path.abspath(os.path.expanduser(path))
 
 
+class _Parser(argparse.ArgumentParser):
+    """argparse exits 2 on a usage error - the same number as EXIT_FINDING.
+
+    That made "you typed the command wrong" indistinguishable from "a real
+    security finding was evaluated and found", one layer above dispatch. A
+    usage error means NO check ran, which is INVALID. >:[
+    """
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        print(f"cc: {message}", file=sys.stderr)
+        raise SystemExit(EXIT_INVALID)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="cc", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = _Parser(prog="cc", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--json", action="store_true", help="machine-readable envelope (same shape for every check)")
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub = ap.add_subparsers(dest="cmd", required=True, parser_class=_Parser)
 
     b = sub.add_parser("baseline", help="dirty-vs-clean failing-set diff: settle 'that failure is pre-existing'")
     b.add_argument("repo")

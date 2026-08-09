@@ -153,14 +153,20 @@ def check(
     sast_ran = []
     if wfs and have("actionlint"):
         p = run(["actionlint", "-no-color", "-oneline"], cwd=repo, timeout=180)
-        sast_ran.append("actionlint")
+        if p.timed_out:
+            # A timed-out scanner produced no findings. Counting it as "ran"
+            # suppressed both the no-SAST fallback AND --require-sast, so a
+            # template-injection workflow scored CLEAN. 💀
+            r.add(Finding(what="actionlint timed out - workflows were NOT linted", severity="invalid"))
+        else:
+            sast_ran.append("actionlint")
         # actionlint exits 1 when it has findings; that is data, not an error.
         # But its OWN diagnostics ("no project was found in any parent
         # directories...") come out on the same stream, and reporting those as
         # security findings is how a tool earns a mute. Only accept the real
         # `file:line:col: message` shape. XX
         saw_real = False
-        for ln in p.text().splitlines():
+        for ln in ([] if p.timed_out else p.text().splitlines()):
             ln = ln.strip()
             if not ln:
                 continue
@@ -178,10 +184,10 @@ def check(
             cwd=repo,
             timeout=300,
         )
-        sast_ran.append("zizmor")
         if p.timed_out:
-            r.add(Finding(what="zizmor timed out", severity="invalid"))
+            r.add(Finding(what="zizmor timed out - workflows were NOT scanned", severity="invalid"))
         else:
+            sast_ran.append("zizmor")
             for ln in p.text().splitlines():
                 s = ln.strip()
                 if re.match(r"^(error|warning|note)\[", s):
@@ -224,11 +230,29 @@ def check(
                     if re.search(r"(GHSA|PYSEC|CVE)-", ln):
                         r.add(Finding(what="vulnerable python dependency", detail=ln.strip(), fix="bump it"))
         elif req:
-            r.note("requirements present but pip-audit not installed (pipx install pip-audit==2.10.0)")
+            r.add(
+                Finding(
+                    what="python requirements present but pip-audit is not installed - dependencies UNSCANNED",
+                    detail=", ".join(req),
+                    fix="pipx install pip-audit==2.10.0",
+                    severity="judgment",
+                )
+            )
 
-        if os.path.isfile(os.path.join(repo, "package-lock.json")) and have("npm"):
+        has_lock = os.path.isfile(os.path.join(repo, "package-lock.json"))
+        if has_lock and not have("npm"):
+            r.add(
+                Finding(
+                    what="package-lock.json present but npm is not installed - dependencies UNSCANNED",
+                    fix="brew install node",
+                    severity="judgment",
+                )
+            )
+        if has_lock and have("npm"):
             p = run(["npm", "audit", "--audit-level=high"], cwd=repo, timeout=420)
-            if p.code != 0 and "vulnerabilities" in p.text():
+            # npm prints the SINGULAR "1 critical severity vulnerability" when there
+            # is exactly one, so matching the plural dropped real single CVEs.
+            if p.code != 0 and "vulnerabilit" in p.text():
                 tail = [l for l in p.text().splitlines() if "vulnerabilit" in l]
                 r.add(
                     Finding(

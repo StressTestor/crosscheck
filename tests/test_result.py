@@ -75,5 +75,25 @@ class TestResult(unittest.TestCase):
         self.assertEqual(emit([a, b], as_json=True, stream=buf), EXIT_INVALID)
 
 
+class TestCliContract(unittest.TestCase):
+    def test_usage_error_is_invalid_not_finding(self):
+        # argparse exits 2 by default - the same number as EXIT_FINDING. That
+        # made "you typed it wrong" (no check ran) indistinguishable from "a
+        # real finding was evaluated and found".
+        import subprocess, sys as _s, os as _o
+        root = _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__)))
+        for argv in (["scope"], ["nosuchcommand"], ["baseline"], []):
+            p = subprocess.run([_s.executable, _o.path.join(root, "crosscheck.py"), *argv],
+                               capture_output=True, text=True)
+            self.assertEqual(p.returncode, EXIT_INVALID, f"{argv} -> {p.returncode}")
+
+    def test_help_still_exits_zero(self):
+        import subprocess, sys as _s, os as _o
+        root = _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__)))
+        p = subprocess.run([_s.executable, _o.path.join(root, "crosscheck.py"), "--help"],
+                           capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

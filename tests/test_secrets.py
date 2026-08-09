@@ -49,6 +49,23 @@ class TestSecrets(unittest.TestCase):
         r = secrets.check([self.d])
         self.assertEqual(r.code, EXIT_FINDING, r.notes)
 
+    @unittest.skipUnless(have("gitleaks"), "gitleaks not installed")
+    def test_relative_allow_resolves_against_the_scanned_root(self):
+        # `cc secrets ./evidence --allow report.md` run from anywhere else
+        # silently allow-listed nothing, so the report's own legitimate finding
+        # was never suppressed - and the CLI help demonstrates that exact form.
+        with open(self.target, "w") as fh:
+            fh.write(FAKE_KEY)
+        r = secrets.check([self.d], allow=["report.md"])
+        wheres = " ".join(f.where for f in r.findings)
+        self.assertNotIn("report.md", wheres, wheres)
+        self.assertIn("UNRELATED_sibling", wheres, wheres)
+
+    @unittest.skipUnless(have("gitleaks"), "gitleaks not installed")
+    def test_unmatched_allow_says_so_instead_of_silently_doing_nothing(self):
+        r = secrets.check([self.d], allow=["no-such-file.md"])
+        self.assertTrue(any("matched no file" in n for n in r.notes), r.notes)
+
     def test_missing_path_is_invalid(self):
         self.assertEqual(secrets.check([os.path.join(self.d, "nope")]).code, EXIT_INVALID)
 

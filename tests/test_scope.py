@@ -102,6 +102,15 @@ class TestScopeCheck(unittest.TestCase):
         for bad in (up * 3 + "somewhere", "..", "a" + os.sep + "b", os.sep + "abs", "acme" + os.sep + ".." + os.sep + "acme"):
             self.assertEqual(scope.check(bad, ["a.com"]).code, EXIT_INVALID, bad)
 
+    def test_underscore_prefixed_example_policies_still_load(self):
+        # `_template` / `_example-eero` are the documented names for the
+        # non-program files; rejecting a leading underscore made the shipped
+        # examples unloadable and turned a FINDING into an INVALID.
+        with open(os.path.join(self.dir, "_example-acme.json"), "w") as fh:
+            json.dump({"in_scope": ["acme.com"]}, fh)
+        r = scope.check("_example-acme", ["notacme.com"])
+        self.assertEqual(r.code, EXIT_FINDING, [f.what for f in r.findings])
+
     def test_traversal_cannot_load_a_json_outside_the_policy_dir(self):
         # Prove it with a real file one level up from the policy dir.
         outside = os.path.join(os.path.dirname(self.dir), "sneaky.json")

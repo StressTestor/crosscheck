@@ -90,6 +90,28 @@ class TestPrBranch(unittest.TestCase):
         finally:
             os.environ.pop("CROSSCHECK_IDENTITIES", None)
 
+    def test_coauthored_commit_is_not_a_stray(self):
+        # A pair-programmed commit authored by a collaborator but crediting you
+        # via GitHub's Co-authored-by trailer is yours. The old advice was to
+        # cherry-pick "only your shas", i.e. drop it.
+        with open(os.path.join(self.repo, "pair.txt"), "w") as fh:
+            fh.write("x\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "-c", "user.name=Pair", "-c", "user.email=pair@elsewhere.tld",
+            "commit", "-qm", "pair work\n\nCo-authored-by: Me <me@mine.tld>")
+        r = prbranch.check(self.repo)
+        self.assertEqual(r.code, EXIT_CLEAN, [f.detail for f in r.findings])
+
+    def test_uncredited_foreign_commit_still_flagged(self):
+        # Discriminating: the co-author path must not blanket-allow everything.
+        with open(os.path.join(self.repo, "theirs.txt"), "w") as fh:
+            fh.write("x\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "-c", "user.name=Other", "-c", "user.email=other@elsewhere.tld",
+            "commit", "-qm", "their work\n\nCo-authored-by: Someone <someone@else.tld>")
+        r = prbranch.check(self.repo)
+        self.assertEqual(r.code, EXIT_FINDING)
+
     def test_unresolvable_branch_is_invalid_not_clean(self):
         # git could not answer != "zero commits, nothing to push".
         r = prbranch.check(self.repo, branch="no-such-branch")

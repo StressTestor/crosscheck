@@ -53,7 +53,7 @@ crosscheck/
   harness/
     pr_check_harness.js   # stubs github/context/core so a repo's bot runs offline
   policies/               # hand-transcribed program policy JSON (see its README)
-  tests/                  # unittest; 93 tests, real git repos and real subprocesses
+  tests/                  # unittest; 100 tests, real git repos and real subprocesses
   install.sh              # ~/.local/bin/cc launcher + optional pre-push hook
 ```
 
@@ -176,7 +176,7 @@ would mean two answers that drift:
 | filesystem path boundaries | `scopeguard` (`/Volumes/T7/scopeguard`) |
 | running recon | `scopecreep` |
 | repo liveness / anti-AI-policy scan | `oss-scout-nonsec` |
-| touching a **bounty/scan target** | no subcommand ever sends a packet to a target host. `pr-branch` DOES contact your configured git remote (`git ls-remote`) when the local `<remote>/HEAD` symref is unset — pass `--base` to avoid it |
+| touching a **bounty/scan target** | no subcommand ever sends a packet to a target host. two documented exceptions, both to infrastructure you already trust: `pr-branch` may run `git ls-remote` against your configured remote (pass `--base` to avoid it), and `cc ci`'s dependency audit queries the npm/PyPI advisory APIs (pass `--no-audit` to avoid it) |
 
 also deliberately cut after the design critique, with reasons in the git
 history: a codex prior-scan index (its artifacts live in a purged `$TMPDIR`),
@@ -186,5 +186,15 @@ regression runner (ghost blocks its own tester from inside an agent).
 
 ## last updated
 
-2026-08-09 — initial build: 7 checks, 93 tests, skill + adjudicate workflow.
-Two adversarial review rounds applied (15 defects fixed, incl. 6 false-CLEAN paths).
+2026-08-09 — initial build: 7 checks, 100 tests, skill + adjudicate workflow.
+Three adversarial review rounds applied (24 defects fixed, incl. 9 false-CLEAN paths).
+
+**Known, accepted limits** (documented rather than papered over):
+- a hostile repo's PR checker shares the harness process and can forge a CLEAN
+  `pr-body` verdict line. containment (no writes/exec/env) holds; verdict
+  integrity against hostile code does not, and is not claimed.
+- `--allow-fs-read` confinement can be widened by symlinks planted inside the
+  audited repo, so treat `pr-body` reads on an untrusted repo as best-effort.
+- `ci`'s `uses:`/`permissions:` greps are line-oriented, not YAML-aware; a
+  `uses:` string inside a `run: |` block can be misread. zizmor/actionlint are
+  the YAML-aware authority and run alongside.

@@ -82,9 +82,35 @@ def _gitleaks_dir(path: str, r: Result) -> int:
     return n
 
 
+def _resolve_allow(allow: list[str], paths: list[str], r: Result) -> list[str]:
+    """Resolve --allow against the SCANNED roots, not the process cwd.
+
+    `cc secrets ./evidence --allow report.md` from anywhere but the scan
+    directory silently allow-listed a path that did not exist, so the report's
+    own legitimate finding was never suppressed - and the CLI help demonstrates
+    exactly that bare-relative form. An --allow that matches nothing is a loud
+    note, never a silent no-op.
+    """
+    out = []
+    for a in allow:
+        if os.path.isabs(a):
+            out.append(os.path.realpath(a))
+            continue
+        cands = [os.path.realpath(a)]
+        for p in paths:
+            base = p if os.path.isdir(p) else os.path.dirname(p)
+            cands.append(os.path.realpath(os.path.join(base, a)))
+        hit = next((c for c in cands if os.path.exists(c)), None)
+        if hit:
+            out.append(hit)
+        else:
+            r.note(f"--allow {a!r} matched no file under the scanned paths - it is NOT suppressing anything")
+    return out
+
+
 def check(paths: list[str], allow: list[str] | None = None, history: bool = False) -> Result:
     r = Result(check=CHECK)
-    allow = [os.path.abspath(a) for a in (allow or [])]
+    allow = _resolve_allow(list(allow or []), [os.path.abspath(p) for p in paths], r)
 
     if not paths:
         return Result.invalid(CHECK, "no paths given", "cc secrets <dir-or-file> [...] [--allow report.md]")
@@ -133,22 +159,24 @@ def check(paths: list[str], allow: list[str] | None = None, history: bool = Fals
         if allow:
             kept = []
             for f in r.findings[before:]:
-                fp = os.path.abspath(f.where.rsplit(":", 1)[0]) if f.where else ""
+                fp = os.path.realpath(f.where.rsplit(":", 1)[0]) if f.where else ""
                 if fp in allow:
                     r.note(f"allowed (submission target): {f.where}")
                 else:
                     kept.append(f)
             r.findings = r.findings[:before] + kept
 
-    # Recompute the code after any allow-list pruning, so an allowed-only run
-    # is genuinely CLEAN rather than stuck at FINDING.
-    from ..result import EXIT_CLEAN, EXIT_FINDING, EXIT_INVALID
-    if any(f.severity == "invalid" for f in r.findings):
-        r.code = EXIT_INVALID
-    elif r.findings:
-        r.code = EXIT_FINDING
-    else:
-        r.code = EXIT_CLEAN
+    # Recompute the code after allow-list pruning so an allowed-only run is
+    # genuinely CLEAN. Rebuild through Result.add rather than re-deriving the
+    # mapping here - the private copy did not know about "judgment" and coded
+    # it as FINDING, which is exactly the drift a second implementation buys.
+    from ..result import EXIT_CLEAN
+    kept = list(r.findings)
+    r.findings = []
+    r.code = EXIT_CLEAN
+    for f in kept:
+        r.add(f)
+    if not r.findings:
         r.note(f"gitleaks found nothing across {len(paths)} path(s)")
 
     if have("trufflehog"):

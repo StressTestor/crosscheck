@@ -108,7 +108,14 @@ def check(
         )
         return r
 
-    strays = [c for c in commits if not G.same_person(c["email"], mine)]
+    # A pair-programmed commit authored by a collaborator but crediting you via
+    # a Co-authored-by trailer is YOURS. Telling someone to cherry-pick "only
+    # your shas" would have them drop it.
+    strays = [
+        c for c in commits
+        if not G.same_person(c["email"], mine)
+        and not any(G.same_person(e, mine) for e in c.get("coauthors", []))
+    ]
     r.data["foreign_commits"] = strays
 
     if len(commits) > max_commits:

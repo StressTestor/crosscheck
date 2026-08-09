@@ -8,6 +8,7 @@ teach yourself to ignore the tool. (｡◕‿↼)
 from __future__ import annotations
 
 import os
+import re
 
 from .run import run, Proc
 
@@ -79,7 +80,7 @@ def commits_ahead(path: str, branch: str, base_ref: str) -> list[dict] | None:
     - which read as CLEAN "nothing to push" for a mistyped branch name. 💀
     """
     sep = "\x1f"
-    fmt = sep.join(["%H", "%an", "%ae", "%s"])
+    fmt = sep.join(["%H", "%an", "%ae", "%s", "%b"])
     p = git(path, "log", f"--format={fmt}", f"{base_ref}..{branch}")
     if not p.ok:
         return None
@@ -88,11 +89,23 @@ def commits_ahead(path: str, branch: str, base_ref: str) -> list[dict] | None:
         if not ln.strip():
             continue
         parts = ln.split(sep)
-        if len(parts) != 4:
+        if len(parts) < 4:
             continue
-        sha, an, ae, subj = parts
-        out.append({"sha": sha, "author": an, "email": ae, "subject": subj})
+        sha, an, ae, subj = parts[0], parts[1], parts[2], parts[3]
+        body = parts[4] if len(parts) > 4 else ""
+        out.append(
+            {"sha": sha, "author": an, "email": ae, "subject": subj,
+             "coauthors": _coauthors(body)}
+        )
     return out
+
+
+_COAUTHOR_RE = re.compile(r"^\s*co-authored-by:.*?<([^>]+)>", re.I | re.M)
+
+
+def _coauthors(body: str) -> list[str]:
+    """Emails from Co-authored-by trailers - GitHub's own pairing convention."""
+    return [m.strip().lower() for m in _COAUTHOR_RE.findall(body or "")]
 
 
 def commit_files(path: str, sha: str) -> list[str]:

@@ -128,5 +128,5 @@ the other.
 python3 -m unittest discover -s tests -t .
 ```
 
-93 tests. real git repos, real subprocesses, and the adversarial cases are the
+100 tests. real git repos, real subprocesses, and the adversarial cases are the
 point - `notaneero.com` and `eero.com.attacker.net` both have to come back OUT.
