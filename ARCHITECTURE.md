@@ -53,7 +53,7 @@ crosscheck/
   harness/
     pr_check_harness.js   # stubs github/context/core so a repo's bot runs offline
   policies/               # hand-transcribed program policy JSON (see its README)
-  tests/                  # unittest; 103 tests, real git repos and real subprocesses
+  tests/                  # unittest; 106 tests, real git repos and real subprocesses
   install.sh              # ~/.local/bin/cc launcher + optional pre-push hook
 ```
 
@@ -157,6 +157,8 @@ because `ci` flags shell sinks in other people's code.
 | `pr-body` INVALID: "checker process exited N" | the repo's bot crashed (often an uncaught async throw) | read its stderr in the finding detail. a dead checker is never reported as a passing one |
 | `ci` finds nothing on a bad repo | no SAST installed | `pipx install zizmor==1.25.2 && brew install actionlint`, or pass `--require-sast` to make the gap loud |
 | `baseline` says INVALID on a clean tree | nothing to compare | that is correct; use `verify-change` for a committed change |
+| `baseline` refuses over a dirty submodule | `git stash` does not recurse into submodules | commit or stash inside the submodule first — the alternative is running your suite over work nothing can restore |
+| `ci` says a scanner "exited WITHOUT scanning" | malformed `.github/zizmor.yml` / `.github/actionlint.yaml`, or not a git repo | fix the config. it is deliberately not credited as a scan — the audited repo must not be able to disable its own audit |
 | `baseline` says changes are in the stash | `git stash pop` hit a conflict | resolve it by hand; the tool reports loudly rather than swallowing it |
 | `scope`/`vrp` INVALID for a program | no policy file | `cp policies/_template.json policies/<program>.json` and transcribe by hand |
 | a `vrp` ruling looks wrong | policy is a hand transcript | every ruling prints its source quote — check the transcription, then the page |
@@ -186,9 +188,9 @@ regression runner (ghost blocks its own tester from inside an agent).
 
 ## last updated
 
-2026-08-09 — initial build: 7 checks, 103 tests, skill + adjudicate workflow.
-Three adversarial review rounds + marko applied (29 defects fixed, incl. 9 false-CLEAN
-paths and a false-INELIGIBLE in `vrp`).
+2026-08-09 — initial build: 7 checks, 106 tests, skill + adjudicate workflow.
+Four adversarial review rounds + marko applied (32 defects fixed, incl. 10 false-CLEAN
+paths, a false-INELIGIBLE in `vrp`, and one unrecoverable data-loss path in `baseline`).
 
 **Known, accepted limits** (documented rather than papered over):
 - a hostile repo's PR checker shares the harness process and can forge a CLEAN

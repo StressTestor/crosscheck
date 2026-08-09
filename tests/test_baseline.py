@@ -139,6 +139,43 @@ class TestBaselineIntegration(unittest.TestCase):
         self.assertEqual(r.code, EXIT_FINDING)
         self.assertTrue(os.path.exists(os.path.join(self.d, "brand_new_untracked.txt")))
 
+    def test_dirty_submodule_aborts_before_running_the_suite(self):
+        # Data loss, reproduced: `git stash -u` does not recurse into
+        # submodules, so a suite writing there destroyed uncommitted work with
+        # no stash to recover from - and the tool only noticed AFTER running.
+        inner = tempfile.mkdtemp()
+        _git(inner, "init", "-q")
+        _git(inner, "config", "user.email", "t@t.t")
+        _git(inner, "config", "user.name", "t")
+        with open(os.path.join(inner, "inner.txt"), "w") as fh:
+            fh.write("original\n")
+        _git(inner, "add", "-A")
+        _git(inner, "commit", "-qm", "init")
+
+        subprocess.run(
+            ["git", "-C", self.d, "-c", "protocol.file.allow=always",
+             "submodule", "add", "-q", inner, "sub"],
+            check=True, capture_output=True,
+        )
+        _git(self.d, "add", "-A")
+        _git(self.d, "commit", "-qm", "add sub")
+
+        precious = os.path.join(self.d, "sub", "inner.txt")
+        with open(precious, "w") as fh:
+            fh.write("MY IMPORTANT UNCOMMITTED WORK\n")
+
+        # A suite that would clobber it.
+        with open(os.path.join(self.d, "suite.sh"), "w") as fh:
+            fh.write('#!/bin/sh\necho clobbered > "$(dirname "$0")/sub/inner.txt"\necho "1 passed"\n')
+        os.chmod(os.path.join(self.d, "suite.sh"), 0o755)
+
+        r = baseline.check(self.d, [os.path.join(self.d, "suite.sh")])
+        self.assertEqual(r.code, EXIT_INVALID)
+        self.assertIn("sub", r.data.get("dirty_submodules", []))
+        with open(precious) as fh:
+            self.assertIn("MY IMPORTANT UNCOMMITTED WORK", fh.read(),
+                          "baseline ran the suite over unprotected submodule work")
+
     def test_not_a_repo_is_invalid(self):
         d = tempfile.mkdtemp()
         self.assertEqual(baseline.check(d, ["true"]).code, EXIT_INVALID)

@@ -153,6 +153,39 @@ def _noreply_handle(email: str) -> str | None:
     return local.split("+", 1)[1] if "+" in local else local
 
 
+def submodule_paths(path: str) -> list[str]:
+    """Submodule paths, recursively. Empty when there are none."""
+    p = git(path, "submodule", "status", "--recursive")
+    if not p.ok:
+        return []
+    out = []
+    for ln in p.out.splitlines():
+        # " <sha> <path> (<describe>)" - the leading char is a status flag.
+        parts = ln.strip().split()
+        if len(parts) >= 2:
+            out.append(parts[1])
+    return out
+
+
+def dirty_submodules(path: str) -> list[str]:
+    """Submodules holding uncommitted content.
+
+    `git stash --include-untracked` does NOT recurse into submodules, so any
+    work in here is invisible to the stash-and-restore contract. Discovering
+    that after running a suite that writes into one costs the user the work,
+    with no stash to recover from. Ask BEFORE running anything. 💀
+    """
+    dirty = []
+    for sub in submodule_paths(path):
+        full = os.path.join(path, sub)
+        if not os.path.isdir(full):
+            continue
+        st = git(full, "status", "--porcelain", "--untracked-files=all")
+        if st.ok and st.out.strip():
+            dirty.append(sub)
+    return dirty
+
+
 def dirty_files(path: str) -> list[str]:
     """Everything not committed, tracked or not. Used to decide stashability."""
     p = git(path, "status", "--porcelain", "--untracked-files=all")

@@ -147,6 +147,20 @@ class TestPrBody(unittest.TestCase):
         r = prbody.check(repo, body)
         self.assertEqual(r.code, EXIT_CLEAN, [f.where for f in r.findings])
 
+    def test_instructional_heading_suffix_is_not_required_verbatim(self):
+        # odysseus ships "## Visual / UI changes — REQUIRED if you touched
+        # anything that renders". Demanding the draft reproduce the template
+        # author's own annotation reported a present section as missing.
+        repo = tempfile.mkdtemp()
+        os.makedirs(os.path.join(repo, ".github"))
+        with open(os.path.join(repo, ".github", "pull_request_template.md"), "w") as fh:
+            fh.write("## Summary\n\n## Visual / UI changes \u2014 REQUIRED if you touched anything that renders\n")
+        body = os.path.join(repo, "d.md")
+        with open(body, "w") as fh:
+            fh.write("## Summary\nyes\n\n## Visual / UI changes\nnone, backend only\n")
+        r = prbody.check(repo, body)
+        self.assertEqual(r.code, EXIT_CLEAN, [f.where for f in r.findings])
+
     def test_empty_draft_is_a_finding(self):
         r = prbody.check(self.repo, self._draft("   "))
         self.assertEqual(r.code, EXIT_FINDING)
@@ -257,7 +271,7 @@ class TestCi(unittest.TestCase):
         try:
             r = ci.check(d, audit=False)
             self.assertNotEqual(r.code, EXIT_CLEAN)
-            self.assertTrue(any("no Actions SAST installed" in f.what for f in r.findings))
+            self.assertTrue(any("no Actions SAST actually ran" in f.what for f in r.findings))
         finally:
             ci.have = real
 
@@ -284,6 +298,24 @@ class TestCi(unittest.TestCase):
         self.assertEqual(r.data["route"]["workflowFiles"], [".github/workflows/w.yml"])
         self.assertTrue(any(f.severity == "judgment" for f in r.findings))
         self.assertIn(r.code, (EXIT_JUDGMENT, EXIT_FINDING))
+
+    def test_broken_scanner_config_cannot_buy_a_clean(self):
+        # The audited repo owns .github/actionlint.yaml and .github/zizmor.yml.
+        # Crediting a config-errored scanner as "ran" let a repo ship two junk
+        # files and suppress both --require-sast and the no-SAST fallback.
+        d = self._repo(
+            "name: x\non: pull_request_target\njobs:\n  a:\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - run: echo \"${{ github.event.pull_request.title }}\"\n"
+        )
+        for fn in ("actionlint.yaml", "zizmor.yml"):
+            with open(os.path.join(d, ".github", fn), "w") as fh:
+                fh.write("not: [valid\n  yaml: {{{\n")
+        r = ci.check(d, require_sast=True, audit=False)
+        self.assertNotEqual(r.code, EXIT_CLEAN, r.notes)
+        self.assertFalse(
+            any("clean under" in n for n in r.notes),
+            f"claimed clean under scanners that never ran: {r.notes}",
+        )
 
     def test_no_changed_files_means_no_route(self):
         r = ci.check(self._repo(PINNED), audit=False)

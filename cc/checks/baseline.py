@@ -23,6 +23,10 @@ Judgment calls:
    crashed" must never be laundered into "your change broke a test".
 4. Interpreter/toolchain versions are recorded for both runs so a local-only
    failure reads as an env hypothesis rather than a finding.
+5. Every "can we protect this tree?" question is answered BEFORE the suite is
+   executed even once. Dirty submodules abort the run outright - `git stash`
+   does not recurse into them, so a suite that writes there destroys work with
+   no stash to recover from. Warning about it afterwards is an obituary. XX
 """
 
 from __future__ import annotations
@@ -101,6 +105,29 @@ def check(repo: str, suite_argv: list[str], timeout: int = 900, as_dict=None) ->
             "baseline compares dirty vs clean; with a clean tree use verify-change instead",
         )
 
+    # ---- prove we can protect the tree BEFORE running anything -----------
+    # Ordering is the whole point. Everything below used to be discovered
+    # after the suite had already executed against the real working tree, at
+    # which point the warning is an obituary. >:[
+    dirty_subs = G.dirty_submodules(repo)
+    if dirty_subs:
+        return Result.invalid(
+            CHECK,
+            f"submodule(s) hold uncommitted work that `git stash` cannot protect: {', '.join(dirty_subs)}",
+            "commit or stash inside the submodule first - otherwise baseline would run your "
+            "suite over them with no way to restore",
+            data={"dirty_submodules": dirty_subs},
+        )
+
+    ign = G.git(repo, "status", "--porcelain", "--ignored=matching")
+    ignored = [ln[3:].strip() for ln in ign.out.splitlines() if ln.startswith("!!")] if ign.ok else []
+    if ignored:
+        r.data["ignored_unprotected"] = ignored[:50]
+        r.note(
+            f"{len(ignored)} gitignored path(s) are NOT covered by the stash - "
+            f"if your suite writes to them, those writes are not reverted"
+        )
+
     p1 = run(suite_argv, cwd=repo, timeout=timeout)
     if p1.timed_out:
         return Result.invalid(CHECK, f"suite timed out on the dirty tree after {timeout}s")
@@ -113,20 +140,6 @@ def check(repo: str, suite_argv: list[str], timeout: int = 900, as_dict=None) ->
             f"suite exited {p1.code} on the dirty tree but no test-failure names were parsed",
             "looks like a harness/collection error, not a test failure - fix the runner first",
             data={"stderr_tail": p1.text()[-1500:]},
-        )
-
-    # ---- gitignored content is NOT protected by the stash ----------------
-    # `git stash -u` covers tracked + untracked, but NOT ignored files. If the
-    # suite writes to a gitignored file you care about (a local .env, a
-    # hand-edited config), that write hits the real tree with no backup and the
-    # run can still say CLEAN. Say so before touching anything.
-    ign = G.git(repo, "status", "--porcelain", "--ignored=matching")
-    ignored = [ln[3:].strip() for ln in ign.out.splitlines() if ln.startswith("!!")] if ign.ok else []
-    if ignored:
-        r.data["ignored_unprotected"] = ignored[:50]
-        r.note(
-            f"{len(ignored)} gitignored path(s) are NOT covered by the stash - "
-            f"if your suite writes to them, those writes are not reverted"
         )
 
     # ---- stash, run 2, restore -------------------------------------------

@@ -154,13 +154,33 @@ def check(
     sast_ran = []
     if wfs and have("actionlint"):
         p = run(["actionlint", "-no-color", "-oneline"], cwd=repo, timeout=180)
+        # A scanner only counts as having RUN if it actually analyzed the
+        # workflows. Crediting a timeout - or a config error - suppressed both
+        # --require-sast and the no-SAST fallback, and the audited repo owns
+        # `.github/actionlint.yaml`, so a repo could ship one junk config file
+        # and buy itself a CLEAN. The input disabling the audit must never come
+        # from the thing being audited. 💀
+        #
+        # actionlint exits 3 for BOTH real findings and "no project was found",
+        # so the exit code cannot decide this; the output has to.
+        al_findings = [ln.strip() for ln in p.text().splitlines() if _ACTIONLINT_RE.match(ln.strip())]
+        al_self = [
+            ln.strip() for ln in p.text().splitlines()
+            if "no project was found" in ln or "could not parse" in ln or ln.strip().startswith("actionlint:")
+        ]
         if p.timed_out:
-            # A timed-out scanner produced no findings. Counting it as "ran"
-            # suppressed both the no-SAST fallback AND --require-sast, so a
-            # template-injection workflow scored CLEAN. 💀
-            r.add(Finding(what="actionlint timed out - workflows were NOT linted", severity="invalid"))
-        else:
+            r.note("actionlint timed out - NOT counted as a scanner that ran")
+        elif al_findings or (p.code == 0 and not al_self):
             sast_ran.append("actionlint")
+        else:
+            # Not credited. The verdict is carried by sast_ran staying empty,
+            # which drives the judgment Finding / --require-sast gate below -
+            # so a repo cannot disable the audit by shipping a junk config,
+            # and a plain non-git directory does not become a hard error.
+            r.note(
+                f"actionlint exited {p.code} WITHOUT linting: "
+                + ((al_self[0] if al_self else p.text().strip()[-200:]) or "(no output)")
+            )
         # actionlint exits 1 when it has findings; that is data, not an error.
         # But its OWN diagnostics ("no project was found in any parent
         # directories...") come out on the same stream, and reporting those as
@@ -185,10 +205,15 @@ def check(
             cwd=repo,
             timeout=300,
         )
+        # zizmor: 0 = clean, 14 = findings. Anything else (1 = invalid config,
+        # which the AUDITED repo controls via .github/zizmor.yml) means it did
+        # not scan, and must not be credited as a scanner that ran.
         if p.timed_out:
-            r.add(Finding(what="zizmor timed out - workflows were NOT scanned", severity="invalid"))
-        else:
+            r.note("zizmor timed out - NOT counted as a scanner that ran")
+        elif p.code in (0, 14):
             sast_ran.append("zizmor")
+        else:
+            r.note(f"zizmor exited {p.code} WITHOUT scanning: " + (p.text().strip()[-200:] or "(no output)"))
             for ln in p.text().splitlines():
                 s = ln.strip()
                 if re.match(r"^(error|warning|note)\[", s):
@@ -197,7 +222,7 @@ def check(
 
     if require_sast and not sast_ran:
         return r.fail(
-            "--require-sast given but neither zizmor nor actionlint is installed",
+            "--require-sast given but no Actions SAST produced an analysis (not installed, or exited without scanning)",
             "pipx install zizmor==1.25.2 && brew install actionlint",
         )
     if wfs and not sast_ran:
@@ -206,9 +231,9 @@ def check(
         # a check that passed. So say so in the exit code, not in a note. >:[
         r.add(
             Finding(
-                what="no Actions SAST installed - only pin/permission greps ran, semantics unchecked",
-                detail="zizmor and actionlint decide template injection, credential persistence and token scope; neither is present",
-                fix="pipx install zizmor==1.25.2 && brew install actionlint",
+                what="no Actions SAST actually ran - only pin/permission greps did, semantics unchecked",
+                detail="zizmor and actionlint decide template injection, credential persistence and token scope; neither produced an analysis (not installed, or exited without scanning - see notes)",
+                fix="pipx install zizmor==1.25.2 && brew install actionlint, and check .github/zizmor.yml / .github/actionlint.yaml parse",
                 severity="judgment",
             )
         )

@@ -312,7 +312,12 @@ def check(
     low = _flatten(stripped)
     missing = []
     for sec in _template_sections(tpl):
-        key = _flatten(sec)
+        # Match on the heading's leading clause only. Template authors append
+        # instructions to the heading itself - odysseus ships
+        # "## Visual / UI changes — REQUIRED if you touched anything that
+        # renders" - and demanding the draft reproduce the author's own
+        # annotation verbatim reported a section that IS present as missing.
+        key = _flatten(re.split(r"[—–:(]|\s-\s", sec, maxsplit=1)[0]) or _flatten(sec)
         if not key or len(key) < 3:
             continue
         if key not in low:
