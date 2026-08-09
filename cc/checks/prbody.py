@@ -110,11 +110,44 @@ def _template_sections(path: str) -> list[str]:
     return out
 
 
+_SANDBOX_PROBE_CACHE: dict[str, bool] = {}
+
+
+def _node_supports_permission() -> bool:
+    """Does this node have the permission model? Probed once, then cached."""
+    if "ok" not in _SANDBOX_PROBE_CACHE:
+        p = run(["node", "--permission", "-e", "0"], timeout=30)
+        _SANDBOX_PROBE_CACHE["ok"] = p.ok
+    return _SANDBOX_PROBE_CACHE["ok"]
+
+
+def _sandbox_args(repo: str, body_path: str) -> list[str] | None:
+    """node flags confining an untrusted checker. None when unsupported."""
+    if not _node_supports_permission():
+        return None
+    # BOTH the logical and the resolved path go in the allowlist. On macOS a
+    # temp dir is /var/folders/... which is a symlink to /private/var/... and
+    # node checks the RESOLVED path - allowlisting only one silently denies the
+    # legitimate checker, which then reads as INVALID forever. XX
+    reads = set()
+    for p in (repo, os.path.dirname(_HARNESS), body_path):
+        for form in (os.path.abspath(p), os.path.realpath(p)):
+            reads.add(form)
+
+    argv = ["--permission"]
+    for p in sorted(reads):
+        argv.append(f"--allow-fs-read={p}")
+        if os.path.isdir(p):
+            argv.append(f"--allow-fs-read={p}/*")
+    return argv
+
+
 def check(
     repo: str,
     body_path: str,
     title: str | None = None,
     strict_title: bool = False,
+    trust_repo: bool = False,
 ) -> Result:
     r = Result(check=CHECK)
 
@@ -168,8 +201,26 @@ def check(
         if not os.path.isfile(_HARNESS):
             return Result.invalid(CHECK, f"harness missing: {_HARNESS}")
 
+        # We are about to execute JavaScript that came out of a cloned repo.
+        # For odysseus that is fine; for a repo you cloned an hour ago to audit
+        # it is arbitrary attacker code running as you. So it runs under node's
+        # permission model: reads confined to the repo + the harness + the
+        # draft, and no fs writes, no child_process, no worker threads. They
+        # ALL talk eventually - this one just doesn't get to. 👻
+        sandbox = _sandbox_args(repo, body_path)
+        if sandbox is None and not trust_repo:
+            return Result.invalid(
+                CHECK,
+                "cannot sandbox the repo's checker (node is too old for --permission)",
+                "upgrade node, or re-run with --trust-repo if you genuinely trust this repo's .github/scripts",
+            )
         env = {"CC_PR_TITLE": title or ""}
-        p = run(["node", _HARNESS, checker, body_path], cwd=repo, timeout=90, env=env)
+        argv = ["node"] + (sandbox or []) + [_HARNESS, checker, body_path]
+        p = run(argv, cwd=repo, timeout=90, env=env)
+        if sandbox:
+            r.note("ran the checker sandboxed (no fs writes, no subprocesses, reads confined)")
+        else:
+            r.note("SANDBOX DISABLED via --trust-repo - the repo's JS ran with your privileges")
         if p.timed_out:
             return Result.invalid(CHECK, "the repo's checker timed out")
         try:

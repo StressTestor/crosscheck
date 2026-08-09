@@ -63,6 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     pd.add_argument("body", help="path to the drafted PR body markdown")
     pd.add_argument("--title")
     pd.add_argument("--strict-title", action="store_true")
+    pd.add_argument("--trust-repo", action="store_true", help="run the repo's checker UNSANDBOXED (only for repos you trust)")
 
     c = sub.add_parser("ci", help="Actions supply-chain pass (delegates to zizmor/actionlint), routes deep review")
     c.add_argument("repo")
@@ -108,7 +109,7 @@ def dispatch(a) -> list[Result]:
     if a.cmd == "pr-branch":
         return [prbranch.check(_p(a.repo), a.branch, a.remote, a.base, a.max_commits)]
     if a.cmd == "pr-body":
-        return [prbody.check(_p(a.repo), _p(a.body), a.title, a.strict_title)]
+        return [prbody.check(_p(a.repo), _p(a.body), a.title, a.strict_title, a.trust_repo)]
     if a.cmd == "ci":
         changed = [x.strip() for x in a.changed.split(",") if x.strip()]
         return [ci.check(_p(a.repo), changed, a.require_sast, not a.no_audit)]

@@ -33,9 +33,64 @@ try {
   fail(`cannot read body file: ${e.message}`);
 }
 
+// Load the checker WITHOUT node's module loader.
+//
+// Two reasons. First, `require()` walks every parent directory looking for
+// package.json/node_modules, so a filesystem allowlist tight enough to be
+// worth having also breaks the load. Second, and more to the point: this is
+// JavaScript out of a cloned repo. A repo you pulled an hour ago to audit is
+// attacker-controlled code running as you.
+//
+// So we read the single file ourselves and evaluate it in a vm context whose
+// `require` is deny-by-default. Legitimate github-script checkers only touch
+// the injected {github, context, core}; anything reaching for fs or
+// child_process is not doing PR-description validation. >:[
+const vm = require('vm');
+
+const ALLOWED_MODULES = new Set(['path', 'util', 'url', 'querystring', 'string_decoder']);
+
+function guardedRequire(name) {
+  const clean = String(name).replace(/^node:/, '');
+  if (ALLOWED_MODULES.has(clean)) return require(clean);
+  const e = new Error(
+    `crosscheck sandbox: this checker tried to require('${name}'). ` +
+    `Only ${[...ALLOWED_MODULES].join(', ')} are permitted.`
+  );
+  e.code = 'CROSSCHECK_SANDBOX_DENIED';
+  throw e;
+}
+
+let source;
+try {
+  source = fs.readFileSync(path.resolve(checkerPath), 'utf8');
+} catch (e) {
+  fail(`cannot read checker: ${e.message}`);
+}
+
 let checker;
 try {
-  checker = require(path.resolve(checkerPath));
+  const moduleObj = { exports: {} };
+  const sandbox = {
+    module: moduleObj,
+    exports: moduleObj.exports,
+    require: guardedRequire,
+    console: { log() {}, error() {}, warn() {}, info() {}, debug() {} },
+    process: { env: {}, platform: process.platform, version: process.version },
+    Buffer,
+    URL,
+    URLSearchParams,
+    TextEncoder,
+    TextDecoder,
+    setTimeout, clearTimeout, setInterval, clearInterval,
+    __filename: path.resolve(checkerPath),
+    __dirname: path.dirname(path.resolve(checkerPath)),
+  };
+  vm.createContext(sandbox);
+  // A timeout here only bounds synchronous top-level work; the await below is
+  // bounded by the caller's own subprocess timeout.
+  new vm.Script(source, { filename: path.resolve(checkerPath) }).runInContext(sandbox, { timeout: 10000 });
+  checker = moduleObj.exports;
+  if (checker && typeof checker.default === 'function') checker = checker.default;
 } catch (e) {
   fail(`cannot load checker: ${e.message}`);
 }

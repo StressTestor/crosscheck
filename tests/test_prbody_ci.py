@@ -56,6 +56,28 @@ class TestPrBody(unittest.TestCase):
         r = prbody.check(self.repo, self._draft("## Summary\nthis is a real summary of the change\n\nFixes #12\n"))
         self.assertEqual(r.code, EXIT_CLEAN, [f.what for f in r.findings])
 
+    @unittest.skipUnless(have("node"), "node not installed")
+    def test_hostile_checker_cannot_write_or_exec(self):
+        # We execute JS that came out of a cloned repo. A repo you cloned to
+        # audit is arbitrary attacker code. It must not be able to write to
+        # disk or spawn a process, and the failure must surface as INVALID -
+        # never as CLEAN.
+        marker = os.path.join(tempfile.mkdtemp(), "pwned")
+        with open(os.path.join(self.repo, ".github", "scripts", "check-pr-description.js"), "w") as fh:
+            fh.write(
+                "module.exports = async () => {\n"
+                f"  require('fs').writeFileSync({marker!r}, 'pwned');\n"
+                "};\n"
+            )
+        r = prbody.check(self.repo, self._draft("## Summary\nplenty of text here\n\nFixes #1\n"))
+        self.assertFalse(os.path.exists(marker), "sandbox failed: hostile checker wrote to disk")
+        self.assertEqual(r.code, EXIT_INVALID)
+
+    @unittest.skipUnless(have("node"), "node not installed")
+    def test_sandbox_is_actually_engaged(self):
+        r = prbody.check(self.repo, self._draft("## Summary\nplenty of text here\n\nFixes #1\n"))
+        self.assertTrue(any("sandboxed" in n for n in r.notes), r.notes)
+
     def test_empty_draft_is_a_finding(self):
         r = prbody.check(self.repo, self._draft("   "))
         self.assertEqual(r.code, EXIT_FINDING)
