@@ -24,6 +24,7 @@ Judgment calls:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 
@@ -219,16 +220,41 @@ def check(
             if os.path.isfile(os.path.join(repo, f))
         ]
         if req and have("pip-audit"):
-            argv = ["pip-audit"]
+            argv = ["pip-audit", "--format", "json", "--progress-spinner", "off"]
             for f in req:
                 argv += ["-r", f]
             p = run(argv, cwd=repo, timeout=600)
             if p.timed_out:
-                r.add(Finding(what="pip-audit timed out", severity="invalid"))
-            elif p.code != 0:
-                for ln in p.text().splitlines():
-                    if re.search(r"(GHSA|PYSEC|CVE)-", ln):
-                        r.add(Finding(what="vulnerable python dependency", detail=ln.strip(), fix="bump it"))
+                r.add(Finding(what="pip-audit timed out - dependencies NOT scanned", severity="invalid"))
+            else:
+                # Structured output. Grepping GHSA|PYSEC|CVE out of prose meant
+                # a formatting change silently emptied the findings list.
+                try:
+                    doc = json.loads(p.out) if p.out.strip() else {}
+                except ValueError:
+                    doc = None
+                if doc is None:
+                    if p.code != 0:
+                        r.add(
+                            Finding(
+                                what="pip-audit failed and its output could not be parsed",
+                                detail=p.text().strip()[-300:],
+                                severity="invalid",
+                            )
+                        )
+                else:
+                    for dep in doc.get("dependencies", []) or []:
+                        for v in dep.get("vulns", []) or []:
+                            ids = ", ".join([v.get("id", "?")] + (v.get("aliases") or [])[:2])
+                            fixes = ", ".join(v.get("fix_versions") or []) or "no fixed version published"
+                            r.add(
+                                Finding(
+                                    what="vulnerable python dependency",
+                                    where=f"{dep.get('name', '?')}=={dep.get('version', '?')}",
+                                    detail=ids,
+                                    fix=f"upgrade to: {fixes}",
+                                )
+                            )
         elif req:
             r.add(
                 Finding(
@@ -249,18 +275,38 @@ def check(
                 )
             )
         if has_lock and have("npm"):
-            p = run(["npm", "audit", "--audit-level=high"], cwd=repo, timeout=420)
-            # npm prints the SINGULAR "1 critical severity vulnerability" when there
-            # is exactly one, so matching the plural dropped real single CVEs.
-            if p.code != 0 and "vulnerabilit" in p.text():
-                tail = [l for l in p.text().splitlines() if "vulnerabilit" in l]
-                r.add(
-                    Finding(
-                        what="npm audit reports high/critical vulnerabilities",
-                        detail=(tail[-1].strip() if tail else "")[:200],
-                        fix="npm audit fix, or pin the transitive dep",
-                    )
-                )
+            # --json, not a grep over prose: npm prints the SINGULAR
+            # "1 critical severity vulnerability" for exactly one, and the
+            # human format changes between majors.
+            p = run(["npm", "audit", "--json", "--audit-level=high"], cwd=repo, timeout=420)
+            if p.timed_out:
+                r.add(Finding(what="npm audit timed out - dependencies NOT scanned", severity="invalid"))
+            else:
+                try:
+                    doc = json.loads(p.out) if p.out.strip() else {}
+                except ValueError:
+                    doc = None
+                if doc is None:
+                    if p.code != 0:
+                        r.add(
+                            Finding(
+                                what="npm audit failed and its output could not be parsed",
+                                detail=p.text().strip()[-300:],
+                                severity="invalid",
+                            )
+                        )
+                else:
+                    meta = (doc.get("metadata") or {}).get("vulnerabilities") or {}
+                    high = int(meta.get("high", 0) or 0) + int(meta.get("critical", 0) or 0)
+                    if high:
+                        names = sorted((doc.get("vulnerabilities") or {}).keys())[:8]
+                        r.add(
+                            Finding(
+                                what=f"npm audit: {high} high/critical advisory(ies)",
+                                detail=", ".join(names),
+                                fix="npm audit fix, or pin the transitive dep",
+                            )
+                        )
 
     # ---- route, do not re-lens -------------------------------------------
     if changed:

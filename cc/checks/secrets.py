@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 
 from ..result import Result, Finding
 from ..run import run, have
@@ -34,9 +35,12 @@ CHECK = "secrets"
 
 def _gitleaks_dir(path: str, r: Result) -> int:
     """Scan a directory tree. Returns number of findings added."""
-    out_json = os.path.join(
-        os.environ.get("TMPDIR", "/tmp"), f"cc-gitleaks-{abs(hash(path)) % 10**8}.json"
-    )
+    # mkstemp, not a guessable name in a shared TMPDIR. A predictable path is a
+    # symlink target, and this tool writes a report about secrets into it -
+    # exactly the primitive you would not want to hand someone. (Also `hash()`
+    # is per-process randomized, so the old name was not even stable.) XX
+    fd, out_json = tempfile.mkstemp(prefix="cc-gitleaks-", suffix=".json")
+    os.close(fd)
     p = run(
         [
             "gitleaks", "dir", path,
@@ -49,7 +53,7 @@ def _gitleaks_dir(path: str, r: Result) -> int:
         r.add(Finding(what="gitleaks timed out", where=path, severity="invalid"))
         return 0
     n = 0
-    if os.path.isfile(out_json):
+    if os.path.isfile(out_json) and os.path.getsize(out_json) > 0:
         try:
             with open(out_json, "r", encoding="utf-8") as fh:
                 rows = json.load(fh) or []
@@ -70,7 +74,12 @@ def _gitleaks_dir(path: str, r: Result) -> int:
                 os.unlink(out_json)
             except OSError:
                 pass
-    elif p.code not in (0, 2):
+    else:
+        try:
+            os.unlink(out_json)
+        except OSError:
+            pass
+    if not os.path.isfile(out_json) and p.code not in (0, 2):
         r.add(
             Finding(
                 what=f"gitleaks exited {p.code}",

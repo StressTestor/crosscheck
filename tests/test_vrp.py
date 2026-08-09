@@ -63,6 +63,26 @@ class TestVrp(unittest.TestCase):
         r = vrp.check("p", "denial of service", today=self.today)
         self.assertEqual(r.code, EXIT_FINDING)
 
+    def test_narrow_ineligible_class_does_not_rule_on_the_broad_one(self):
+        # marko's #1: a bare substring test made 'xss' collide with an
+        # ineligible 'self-xss' entry, so the module whose job is deciding
+        # whether to start a weekend of PoC work told you not to bother.
+        self._policy("p", eligible_classes=["xss"],
+                     ineligible_classes=[{"class": "self-xss", "quote": "Self-XSS is not eligible."}])
+        self.assertEqual(vrp.check("p", "xss", today=self.today).code, EXIT_CLEAN)
+        self.assertEqual(vrp.check("p", "self-xss", today=self.today).code, EXIT_FINDING)
+
+    def test_broad_policy_class_still_covers_a_narrower_ask(self):
+        # Discriminating: the fix must not make matching useless. A policy
+        # ruling on 'ssrf' still rules on 'blind ssrf'.
+        self._policy("p", ineligible_classes=[{"class": "ssrf", "quote": "SSRF out of scope."}])
+        self.assertEqual(vrp.check("p", "blind SSRF", today=self.today).code, EXIT_FINDING)
+
+    def test_unrelated_classes_do_not_collide(self):
+        self._policy("p", eligible_classes=["ssrf"],
+                     ineligible_classes=[{"class": "rate limiting", "quote": "no"}])
+        self.assertEqual(vrp.check("p", "ssrf", today=self.today).code, EXIT_CLEAN)
+
     def test_unknown_class_is_judgment_not_clean(self):
         # Absence of a rule is not permission.
         self._policy("p")

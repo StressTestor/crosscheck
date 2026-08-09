@@ -53,7 +53,7 @@ crosscheck/
   harness/
     pr_check_harness.js   # stubs github/context/core so a repo's bot runs offline
   policies/               # hand-transcribed program policy JSON (see its README)
-  tests/                  # unittest; 100 tests, real git repos and real subprocesses
+  tests/                  # unittest; 103 tests, real git repos and real subprocesses
   install.sh              # ~/.local/bin/cc launcher + optional pre-push hook
 ```
 
@@ -186,8 +186,9 @@ regression runner (ghost blocks its own tester from inside an agent).
 
 ## last updated
 
-2026-08-09 — initial build: 7 checks, 100 tests, skill + adjudicate workflow.
-Three adversarial review rounds applied (24 defects fixed, incl. 9 false-CLEAN paths).
+2026-08-09 — initial build: 7 checks, 103 tests, skill + adjudicate workflow.
+Three adversarial review rounds + marko applied (29 defects fixed, incl. 9 false-CLEAN
+paths and a false-INELIGIBLE in `vrp`).
 
 **Known, accepted limits** (documented rather than papered over):
 - a hostile repo's PR checker shares the harness process and can forge a CLEAN

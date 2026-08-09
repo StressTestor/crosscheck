@@ -46,7 +46,35 @@ def _parse_date(s: str):
 
 
 def _norm(s: str) -> str:
-    return "".join(ch for ch in s.lower() if ch.isalnum() or ch == " ").strip()
+    """Lowercase, punctuation -> space, collapse. 'self-XSS' -> 'self xss'."""
+    out = "".join(ch if (ch.isalnum() or ch == " ") else " " for ch in s.lower())
+    return " ".join(out.split())
+
+
+def _class_matches(policy_class: str, asked: str) -> bool:
+    """Does a policy class cover the class you asked about?
+
+    NOT a substring test. `'xss' in 'self xss'` is True, which made asking
+    about plain XSS collide with an ineligible `self-xss` entry and report an
+    ELIGIBLE class as INELIGIBLE - in the one module whose entire job is
+    deciding whether a weekend of PoC work is worth starting. >:[
+
+    Match on whole-word sequences instead: the policy class covers what you
+    asked when one is a contiguous run of words inside the other. 'self xss'
+    no longer covers 'xss', but 'ssrf' still covers 'blind ssrf'.
+    """
+    a, b = _norm(policy_class), _norm(asked)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    aw, bw = a.split(), b.split()
+    # The SHORTER phrase must appear as a contiguous word-run in the longer,
+    # and the longer must be the one you asked about - a policy naming a
+    # narrower class ('self xss') does not rule on the broader one ('xss').
+    if len(aw) > len(bw):
+        return False
+    return any(bw[i:i + len(aw)] == aw for i in range(len(bw) - len(aw) + 1))
 
 
 def check(
@@ -98,8 +126,8 @@ def check(
     for win in pol.get("exclusion_windows", []) or []:
         start = _parse_date(win.get("from", "") or "")
         end = _parse_date(win.get("until", "") or "")
-        classes = [_norm(c) for c in (win.get("classes") or [])]
-        hits = (not classes) or any(c in _norm(vuln_class) or _norm(vuln_class) in c for c in classes)
+        classes = list(win.get("classes") or [])
+        hits = (not classes) or any(_class_matches(c, vuln_class) for c in classes)
         if not hits:
             continue
         active = (start is None or today >= start) and (end is None or today <= end)
@@ -115,14 +143,12 @@ def check(
             r.note(f"an exclusion window for this class EXPIRED on {end} - no longer blocking")
 
     # ---- explicitly ineligible classes ----------------------------------
-    nv = _norm(vuln_class)
     for row in pol.get("ineligible_classes", []) or []:
         name = row.get("class", "") if isinstance(row, dict) else str(row)
         quote = row.get("quote", "") if isinstance(row, dict) else ""
-        n = _norm(name)
-        if not n:
+        if not _norm(name):
             continue
-        if n in nv or nv in n:
+        if _class_matches(name, vuln_class):
             r.add(
                 Finding(
                     what=f"'{name}' is explicitly INELIGIBLE for {program}",
@@ -136,8 +162,8 @@ def check(
     if bar:
         r.note(f"severity bar: {bar}")
         r.data["severity_bar"] = bar
-    below = [_norm(c) for c in (pol.get("below_bar_classes") or [])]
-    if below and any(c in nv or nv in c for c in below):
+    below = list(pol.get("below_bar_classes") or [])
+    if below and any(_class_matches(c, vuln_class) for c in below):
         r.add(
             Finding(
                 what=f"'{vuln_class}' historically lands BELOW {program}'s severity bar",
@@ -146,10 +172,10 @@ def check(
             )
         )
 
-    known = [_norm(row.get("class", "") if isinstance(row, dict) else str(row))
+    known = [row.get("class", "") if isinstance(row, dict) else str(row)
              for row in (pol.get("ineligible_classes") or [])]
-    known += below + [_norm(c) for c in (pol.get("eligible_classes") or [])]
-    if not any(k and (k in nv or nv in k) for k in known):
+    known += below + list(pol.get("eligible_classes") or [])
+    if not any(k and _class_matches(k, vuln_class) for k in known):
         r.add(
             Finding(
                 what=f"no ruling on record for '{vuln_class}' at {program}",
