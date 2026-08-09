@@ -158,7 +158,7 @@ would mean two answers that drift:
 | filesystem path boundaries | `scopeguard` (`/Volumes/T7/scopeguard`) |
 | running recon | `scopecreep` |
 | repo liveness / anti-AI-policy scan | `oss-scout-nonsec` |
-| touching a remote target | nothing here sends a packet. ever |
+| touching a **bounty/scan target** | no subcommand ever sends a packet to a target host. `pr-branch` DOES contact your configured git remote (`git ls-remote`) when the local `<remote>/HEAD` symref is unset — pass `--base` to avoid it |
 
 also deliberately cut after the design critique, with reasons in the git
 history: a codex prior-scan index (its artifacts live in a purged `$TMPDIR`),

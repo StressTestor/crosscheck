@@ -32,7 +32,10 @@ from ..run import run, have
 
 CHECK = "ci"
 
-_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+# git resolves object ids case-insensitively, so an uppercase 40-hex pin is
+# exactly as pinned as a lowercase one. Matching only lowercase reported a
+# correctly-hardened workflow as unpinned. XX
+_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 # `uses: owner/repo@ref` (with optional subpath). Docker/local refs are skipped.
 _USES_RE = re.compile(r"^\s*-?\s*uses:\s*['\"]?([^'\"\s#]+)['\"]?")
 _PERMS_RE = re.compile(r"^\s*permissions:\s*(.*)$")
@@ -134,10 +137,12 @@ def check(
 
     wfs = _workflow_files(repo)
     acts = _composite_actions(repo)
-    if not wfs and not acts:
-        r.note("no GitHub Actions workflows in this repo - nothing to audit")
-        return r
     r.data["workflows"] = [os.path.relpath(p, repo) for p in wfs]
+
+    # No workflows is NOT "nothing to audit" - a repo with no CI can still ship
+    # a vulnerable requirements.txt. The dependency pass below runs regardless.
+    if not wfs and not acts:
+        r.note("no GitHub Actions workflows in this repo")
 
     for p in wfs + acts:
         _scan_pins(p, repo, r)
@@ -146,7 +151,7 @@ def check(
 
     # ---- delegate the semantics ------------------------------------------
     sast_ran = []
-    if have("actionlint"):
+    if wfs and have("actionlint"):
         p = run(["actionlint", "-no-color", "-oneline"], cwd=repo, timeout=180)
         sast_ran.append("actionlint")
         # actionlint exits 1 when it has findings; that is data, not an error.
@@ -167,7 +172,7 @@ def check(
                 r.note(f"actionlint: {ln}")
         if not saw_real and p.code not in (0, 1):
             r.note(f"actionlint exited {p.code} with no parseable findings")
-    if have("zizmor"):
+    if wfs and have("zizmor"):
         p = run(
             ["zizmor", "--offline", "--min-severity=low", "--format=plain", ".github/workflows/"],
             cwd=repo,
@@ -184,13 +189,22 @@ def check(
     r.data["sast"] = sast_ran
 
     if require_sast and not sast_ran:
-        return Result.invalid(
-            CHECK,
+        return r.fail(
             "--require-sast given but neither zizmor nor actionlint is installed",
             "pipx install zizmor==1.25.2 && brew install actionlint",
         )
-    if not sast_ran:
-        r.note("no Actions SAST installed - pin/permission checks only (weaker)")
+    if wfs and not sast_ran:
+        # Reporting CLEAN here would mean "we looked" when only two greps ran.
+        # The tool's own rule: a check that could not run must never look like
+        # a check that passed. So say so in the exit code, not in a note. >:[
+        r.add(
+            Finding(
+                what="no Actions SAST installed - only pin/permission greps ran, semantics unchecked",
+                detail="zizmor and actionlint decide template injection, credential persistence and token scope; neither is present",
+                fix="pipx install zizmor==1.25.2 && brew install actionlint",
+                severity="judgment",
+            )
+        )
 
     # ---- dependency advisories on your own manifests ---------------------
     if audit:
@@ -239,5 +253,6 @@ def check(
             )
 
     if not r.findings:
-        r.note(f"{len(wfs)} workflow(s) clean under: pins, permissions, {', '.join(sast_ran) or 'no SAST'}")
+        scope_txt = ", ".join(["pins", "permissions"] + sast_ran)
+        r.note(f"{len(wfs)} workflow(s) clean under: {scope_txt}")
     return r

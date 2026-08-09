@@ -42,12 +42,24 @@ def run(
     timeout: int = DEFAULT_TIMEOUT,
     env: dict | None = None,
     stdin: str | None = None,
+    inherit_env: bool = True,
 ) -> Proc:
+    """Run argv. `inherit_env=False` gives the child ONLY what you pass.
+
+    That flag exists for one reason: when we execute code that came out of a
+    cloned repo, an in-process sandbox is not a boundary you can lean on. The
+    boundary that holds is the child never receiving the secrets in the first
+    place. Nothing to steal beats trying to stop the stealing. (¬‿¬)
+    """
     if not isinstance(argv, (list, tuple)) or not argv:
         raise TypeError("argv must be a non-empty list - no shell strings here")
     argv = [str(a) for a in argv]
 
-    full_env = os.environ.copy()
+    if inherit_env:
+        full_env = os.environ.copy()
+    else:
+        # PATH so the interpreter resolves; nothing else carries over.
+        full_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
     if env:
         full_env.update(env)
 

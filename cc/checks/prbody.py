@@ -81,6 +81,11 @@ def _strip_comments(text: str) -> str:
     return re.sub(r"<!--.*?-->", "", text, flags=re.S)
 
 
+def _flatten(text: str) -> str:
+    """Lowercase, drop punctuation, collapse whitespace. Used on BOTH sides."""
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", text.lower())).strip()
+
+
 def enforces_conventional_title(repo: str) -> bool:
     wf = os.path.join(repo, ".github", "workflows")
     if not os.path.isdir(wf):
@@ -193,48 +198,51 @@ def check(
     r.data["checker"] = checker
     if checker:
         if not have("node"):
-            return Result.invalid(
-                CHECK,
+            return r.fail(
                 f"{os.path.relpath(checker, repo)} exists but node is not installed",
                 "brew install node - without it we cannot run the repo's real gate",
             )
         if not os.path.isfile(_HARNESS):
-            return Result.invalid(CHECK, f"harness missing: {_HARNESS}")
+            return r.fail(f"harness missing: {_HARNESS}")
 
         # We are about to execute JavaScript that came out of a cloned repo.
         # For odysseus that is fine; for a repo you cloned an hour ago to audit
-        # it is arbitrary attacker code running as you. So it runs under node's
-        # permission model: reads confined to the repo + the harness + the
-        # draft, and no fs writes, no child_process, no worker threads. They
-        # ALL talk eventually - this one just doesn't get to. 👻
+        # it is arbitrary attacker code running as you.
+        #
+        # Two boundaries, and only one of them is real:
+        #   - node's --permission model (OS-level): no fs writes, no
+        #     child_process, no worker threads. This one HOLDS.
+        #   - the vm context's require-guard and process stub (in-process):
+        #     defence in depth ONLY. `this.constructor.constructor('return
+        #     process')()` walks straight out of a vm context - node's own docs
+        #     say vm is not a security mechanism, and it was demonstrated
+        #     against this harness.
+        #
+        # So the env is not "stubbed", it is NOT PASSED: inherit_env=False
+        # means a full vm escape reaches a process whose environment holds
+        # PATH and the three CC_* values we chose. Nothing to steal. 👻
         sandbox = _sandbox_args(repo, body_path)
         if sandbox is None and not trust_repo:
-            return Result.invalid(
-                CHECK,
+            return r.fail(
                 "cannot sandbox the repo's checker (node is too old for --permission)",
                 "upgrade node, or re-run with --trust-repo if you genuinely trust this repo's .github/scripts",
             )
         env = {"CC_PR_TITLE": title or ""}
         argv = ["node"] + (sandbox or []) + [_HARNESS, checker, body_path]
-        p = run(argv, cwd=repo, timeout=90, env=env)
+        p = run(argv, cwd=repo, timeout=90, env=env, inherit_env=False)
         if sandbox:
-            r.note("ran the checker sandboxed (no fs writes, no subprocesses, reads confined)")
+            r.note("ran the checker sandboxed: no fs writes, no subprocesses, no inherited environment")
         else:
             r.note("SANDBOX DISABLED via --trust-repo - the repo's JS ran with your privileges")
         if p.timed_out:
-            return Result.invalid(CHECK, "the repo's checker timed out")
+            return r.fail("the repo's checker timed out")
         try:
             payload = json.loads(p.out.strip().splitlines()[-1]) if p.out.strip() else {}
         except (ValueError, IndexError):
-            return Result.invalid(
-                CHECK,
-                "could not parse harness output",
-                p.text().strip()[:400],
-            )
+            return r.fail("could not parse harness output", p.text().strip()[:400])
 
         if payload.get("error"):
-            return Result.invalid(
-                CHECK,
+            return r.fail(
                 f"the repo's checker raised: {payload['error']}",
                 "the harness stubs github/context/core; this checker may need more surface",
             )
@@ -244,6 +252,7 @@ def check(
             r.note(f"checker warning: {w}")
         problems = payload.get("problems", [])
         r.data["problems"] = problems
+        r.data["failed"] = bool(payload.get("failed"))
         for prob in problems:
             r.add(
                 Finding(
@@ -252,7 +261,21 @@ def check(
                     fix="fix the draft before pushing - this bot runs on your PR",
                 )
             )
-        if not problems and not payload.get("failed"):
+        if payload.get("failed") and not problems:
+            # The checker failed the draft but rendered nothing we could parse.
+            # Plenty of bots just call core.setFailed() and let the job status
+            # carry the message. Reporting CLEAN here would be the exact
+            # failure this tool exists to prevent: the check RAN, and FAILED.
+            r.add(
+                Finding(
+                    what="the repo's checker FAILED this draft: "
+                         + (payload.get("message") or "(no message given)"),
+                    detail="it failed without emitting parseable bullets, so the specific rules are unknown",
+                    fix=f"read {os.path.relpath(checker, repo)} and fix the draft by hand",
+                    severity="judgment",
+                )
+            )
+        elif not problems:
             r.note("the repo's description bot would pass this draft")
         return r
 
@@ -267,10 +290,14 @@ def check(
     r.data["template"] = tpl
 
     stripped = _strip_comments(body)
-    low = stripped.lower()
+    # Normalize BOTH sides identically. Stripping punctuation from only the
+    # template heading meant "Visual / UI changes" became "visual  ui changes"
+    # and could never match the draft's un-stripped text - so every punctuated
+    # heading reported missing even when copied verbatim. >:[
+    low = _flatten(stripped)
     missing = []
     for sec in _template_sections(tpl):
-        key = re.sub(r"[^a-z0-9 ]+", "", sec.lower()).strip()
+        key = _flatten(sec)
         if not key or len(key) < 3:
             continue
         if key not in low:

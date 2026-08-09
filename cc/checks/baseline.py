@@ -115,8 +115,32 @@ def check(repo: str, suite_argv: list[str], timeout: int = 900, as_dict=None) ->
             data={"stderr_tail": p1.text()[-1500:]},
         )
 
+    # ---- gitignored content is NOT protected by the stash ----------------
+    # `git stash -u` covers tracked + untracked, but NOT ignored files. If the
+    # suite writes to a gitignored file you care about (a local .env, a
+    # hand-edited config), that write hits the real tree with no backup and the
+    # run can still say CLEAN. Say so before touching anything.
+    ign = G.git(repo, "status", "--porcelain", "--ignored=matching")
+    ignored = [ln[3:].strip() for ln in ign.out.splitlines() if ln.startswith("!!")] if ign.ok else []
+    if ignored:
+        r.data["ignored_unprotected"] = ignored[:50]
+        r.note(
+            f"{len(ignored)} gitignored path(s) are NOT covered by the stash - "
+            f"if your suite writes to them, those writes are not reverted"
+        )
+
     # ---- stash, run 2, restore -------------------------------------------
-    stash = G.git(repo, "stash", "push", "--include-untracked", "-m", "crosscheck-baseline", timeout=120)
+    # Everything from here until the pop is a window where the user's work
+    # lives only in a stash. Any exception in that window has to name the
+    # recovery command, not vanish into a generic traceback. 💀
+    try:
+        stash = G.git(repo, "stash", "push", "--include-untracked", "-m", "crosscheck-baseline", timeout=120)
+    except BaseException as e:  # noqa: BLE001
+        return Result.invalid(
+            CHECK,
+            f"interrupted while stashing: {e!r}",
+            f"check for a stray stash: git -C {repo} stash list",
+        )
     if not stash.ok:
         return Result.invalid(
             CHECK,
@@ -136,7 +160,18 @@ def check(repo: str, suite_argv: list[str], timeout: int = 900, as_dict=None) ->
         p2 = run(suite_argv, cwd=repo, timeout=timeout)
     except BaseException as e:  # noqa: BLE001 - re-raised below, never swallowed
         run_exc = e
-    restore = G.git(repo, "stash", "pop", timeout=120)
+
+    try:
+        restore = G.git(repo, "stash", "pop", timeout=120)
+    except BaseException as e:  # noqa: BLE001
+        # The pop itself was interrupted. This is the worst moment to be quiet:
+        # the tree is stashed and the user does not know it.
+        return Result.invalid(
+            CHECK,
+            f"INTERRUPTED WHILE RESTORING - your changes are in a stash: {e!r}",
+            f"run: git -C {repo} stash pop",
+            data={"stash_restore_failed": True},
+        )
 
     if not restore.ok:
         # Loudest possible failure: the user's work is sitting in a stash.

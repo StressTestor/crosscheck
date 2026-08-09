@@ -60,7 +60,7 @@ class TestPrBranch(unittest.TestCase):
         r = prbranch.check(self.repo)
         self.assertEqual(r.code, EXIT_FINDING)
         self.assertEqual(len(r.data["foreign_commits"]), 1)
-        self.assertIn("replayed", r.findings[0].what)
+        self.assertIn("not authored by a known identity", r.findings[0].what)
 
     def test_commit_ceiling_fires(self):
         for i in range(4):
@@ -77,6 +77,23 @@ class TestPrBranch(unittest.TestCase):
             self.assertEqual(r.code, EXIT_CLEAN, [f.what for f in r.findings])
         finally:
             os.environ.pop("CROSSCHECK_IDENTITIES", None)
+
+    def test_github_noreply_identity_is_recognised_as_yours(self):
+        # A commit made through GitHub's web editor is authored as
+        # <id>+<user>@users.noreply.github.com. Calling that "replayed" is a
+        # false accusation - this operator has been bitten by it before.
+        os.environ["CROSSCHECK_IDENTITIES"] = "212606152+StressTestor@users.noreply.github.com"
+        try:
+            self._commit("Me", "99999+StressTestor@users.noreply.github.com", "web-edit.txt")
+            r = prbranch.check(self.repo)
+            self.assertEqual(r.code, EXIT_CLEAN, [f.detail for f in r.findings])
+        finally:
+            os.environ.pop("CROSSCHECK_IDENTITIES", None)
+
+    def test_unresolvable_branch_is_invalid_not_clean(self):
+        # git could not answer != "zero commits, nothing to push".
+        r = prbranch.check(self.repo, branch="no-such-branch")
+        self.assertEqual(r.code, EXIT_INVALID)
 
     def test_no_commits_ahead_is_clean(self):
         r = prbranch.check(self.repo)

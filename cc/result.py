@@ -109,6 +109,16 @@ class Result:
         self.code = worst([self.code, want])
         return self
 
+    def fail(self, why: str, fix: str = "") -> "Result":
+        """Escalate THIS result to INVALID, keeping findings already collected.
+
+        `Result.invalid()` builds a fresh object, so calling it late in a check
+        silently discarded everything found earlier - the exit code stayed
+        right but the --json findings list lost real results. Use this whenever
+        the check has already added something. XX
+        """
+        return self.add(Finding(what=why, fix=fix, severity="invalid"))
+
     def note(self, msg: str) -> "Result":
         self.notes.append(msg)
         return self

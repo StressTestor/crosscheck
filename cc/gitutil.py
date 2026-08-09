@@ -71,13 +71,18 @@ def current_branch(path: str) -> str | None:
     return b if b and b != "HEAD" else None
 
 
-def commits_ahead(path: str, branch: str, base_ref: str) -> list[dict]:
-    """Commits on `branch` not reachable from `base_ref`, newest first."""
+def commits_ahead(path: str, branch: str, base_ref: str) -> list[dict] | None:
+    """Commits on `branch` not reachable from `base_ref`, newest first.
+
+    Returns None when git could not answer (unknown revision, corrupt repo).
+    Returning [] there would be indistinguishable from "zero commits, verified"
+    - which read as CLEAN "nothing to push" for a mistyped branch name. 💀
+    """
     sep = "\x1f"
     fmt = sep.join(["%H", "%an", "%ae", "%s"])
     p = git(path, "log", f"--format={fmt}", f"{base_ref}..{branch}")
     if not p.ok:
-        return []
+        return None
     out = []
     for ln in p.out.splitlines():
         if not ln.strip():
@@ -107,6 +112,32 @@ def identities(path: str) -> set[str]:
         if e.strip():
             ids.add(e.strip().lower())
     return ids
+
+
+def same_person(email: str, known: set[str]) -> bool:
+    """Is this email one of yours, allowing for GitHub's noreply forms?
+
+    A commit you made through the GitHub web editor is authored as
+    `<id>+<user>@users.noreply.github.com`. Calling that "written by someone
+    else - replayed" is a false accusation, and this operator has already been
+    bitten by exactly this identity split once. So compare the noreply LOCAL
+    part too, not just the whole address.
+    """
+    e = (email or "").strip().lower()
+    if e in known:
+        return True
+    handle = _noreply_handle(e)
+    if not handle:
+        return False
+    return any(_noreply_handle(k) == handle for k in known)
+
+
+def _noreply_handle(email: str) -> str | None:
+    """`1234+joe@users.noreply.github.com` -> `joe`. None when not a noreply."""
+    if not email.endswith("@users.noreply.github.com"):
+        return None
+    local = email.split("@", 1)[0]
+    return local.split("+", 1)[1] if "+" in local else local
 
 
 def dirty_files(path: str) -> list[str]:

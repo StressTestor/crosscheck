@@ -76,6 +76,15 @@ def check(
     r.data.update({"branch": branch, "remote": rem, "base": base_ref})
 
     commits = G.commits_ahead(repo, branch, base_ref)
+    if commits is None:
+        # git could not answer. "zero commits" and "unanswerable" must not
+        # share the CLEAN 'nothing to push' path - that let a mistyped
+        # --branch report clean. >:[
+        return Result.invalid(
+            CHECK,
+            f"git could not resolve {base_ref}..{branch}",
+            f"check the branch name exists: git -C {repo} rev-parse --verify {branch}",
+        )
     r.data["ahead"] = len(commits)
     behind = G.git(repo, "rev-list", "--count", f"{branch}..{base_ref}")
     if behind.ok and behind.out.strip().isdigit():
@@ -99,7 +108,7 @@ def check(
         )
         return r
 
-    strays = [c for c in commits if c["email"].lower() not in mine]
+    strays = [c for c in commits if not G.same_person(c["email"], mine)]
     r.data["foreign_commits"] = strays
 
     if len(commits) > max_commits:
@@ -114,10 +123,14 @@ def check(
     for c in strays:
         r.add(
             Finding(
-                what="commit on your branch was written by someone else - replayed, not yours",
+                what="commit on your branch is not authored by a known identity of yours",
                 where=c["sha"][:12],
                 detail=f"{c['author']} <{c['email']}>: {c['subject'][:110]}",
-                fix=f"git checkout -B {branch} {base_ref} && git cherry-pick <only your shas>",
+                fix=(
+                    f"if that address IS yours, register it: "
+                    f"CROSSCHECK_IDENTITIES={c['email']} - otherwise it is replayed: "
+                    f"git checkout -B {branch} {base_ref} && git cherry-pick <only your shas>"
+                ),
             )
         )
 

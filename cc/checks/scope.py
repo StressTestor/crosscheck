@@ -75,8 +75,21 @@ def host_matches(host: str, entry: str) -> bool:
     return host == e or host.endswith("." + e)
 
 
+# A program name becomes a filename. Agents derive it from URL slugs and
+# filenames, so it is not always a hand-typed literal - and `../../etc/x`
+# would load an arbitrary json as an authoritative scope policy. Anything but
+# a plain name is refused outright. (¬‿¬)
+_PROGRAM_RE = re.compile(r"^[a-z0-9][a-z0-9_.\-]*$")
+
+
 def load_policy(program: str) -> tuple[dict | None, str | None]:
-    path = os.path.join(policy_dir(), f"{program.lower()}.json")
+    name = (program or "").strip().lower()
+    if not _PROGRAM_RE.match(name) or ".." in name:
+        return None, f"invalid program name {program!r} - letters, digits, dot, dash, underscore only"
+    root = os.path.realpath(policy_dir())
+    path = os.path.realpath(os.path.join(root, f"{name}.json"))
+    if path != root and not path.startswith(root + os.sep):
+        return None, f"policy path for {program!r} escapes the policy directory"
     if not os.path.isfile(path):
         return None, f"no policy for program '{program}' at {path}"
     try:

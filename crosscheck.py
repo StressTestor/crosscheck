@@ -154,8 +154,12 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
 
     if a.cmd == "checks":
-        for c in ALL_CHECKS:
-            print(c)
+        if a.json:
+            import json as _j
+            print(_j.dumps({"checks": ALL_CHECKS, "profiles": PROFILES}, indent=2))
+        else:
+            for c in ALL_CHECKS:
+                print(c)
         return 0
 
     if a.cmd == "decay":

@@ -94,6 +94,22 @@ class TestScopeCheck(unittest.TestCase):
             fh.write("{not json")
         self.assertEqual(scope.check("broken", ["a.com"]).code, EXIT_INVALID)
 
+    def test_program_name_traversal_is_refused(self):
+        # An agent may derive `program` from a URL slug or a filename, so it is
+        # not always a hand-typed literal. A relative path must never load an
+        # arbitrary json and have it treated as an authoritative scope policy.
+        up = ".." + os.sep
+        for bad in (up * 3 + "somewhere", "..", "a" + os.sep + "b", os.sep + "abs", "acme" + os.sep + ".." + os.sep + "acme"):
+            self.assertEqual(scope.check(bad, ["a.com"]).code, EXIT_INVALID, bad)
+
+    def test_traversal_cannot_load_a_json_outside_the_policy_dir(self):
+        # Prove it with a real file one level up from the policy dir.
+        outside = os.path.join(os.path.dirname(self.dir), "sneaky.json")
+        with open(outside, "w") as fh:
+            json.dump({"in_scope": ["anything.com"]}, fh)
+        r = scope.check(".." + os.sep + "sneaky", ["anything.com"])
+        self.assertEqual(r.code, EXIT_INVALID)
+
     def test_no_hosts_is_invalid(self):
         self.assertEqual(scope.check("acme", []).code, EXIT_INVALID)
 

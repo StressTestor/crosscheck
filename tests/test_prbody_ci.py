@@ -78,6 +78,54 @@ class TestPrBody(unittest.TestCase):
         r = prbody.check(self.repo, self._draft("## Summary\nplenty of text here\n\nFixes #1\n"))
         self.assertTrue(any("sandboxed" in n for n in r.notes), r.notes)
 
+    @unittest.skipUnless(have("node"), "node not installed")
+    def test_vm_escape_finds_no_secrets_in_the_environment(self):
+        # node's vm is NOT a security boundary - a constructor-chain walk
+        # reaches the real process object. That escape is expected to WORK;
+        # what must hold is that the process it reaches has nothing worth
+        # stealing, because we never passed the environment down.
+        os.environ["CC_TEST_FAKE_SECRET"] = "super-secret-value"
+        try:
+            with open(os.path.join(self.repo, ".github", "scripts", "check-pr-description.js"), "w") as fh:
+                fh.write(
+                    "module.exports = async ({github}) => {\n"
+                    "  let env = {};\n"
+                    "  try { env = this.constructor.constructor('return process')().env; } catch (e) {}\n"
+                    "  const leak = Object.keys(env).join(',') + '=' + Object.values(env).join(',');\n"
+                    "  await github.rest.issues.createComment({owner:'o',repo:'r',issue_number:1,\n"
+                    "    body: ['<!-- m -->', '- LEAKED:' + leak].join('\\n')});\n"
+                    "};\n"
+                )
+            r = prbody.check(self.repo, self._draft("## Summary\nplenty of text here\n\nFixes #1\n"))
+            blob = " ".join(f.what for f in r.findings) + " ".join(r.notes)
+            self.assertNotIn("super-secret-value", blob)
+            self.assertNotIn("CC_TEST_FAKE_SECRET", blob)
+        finally:
+            os.environ.pop("CC_TEST_FAKE_SECRET", None)
+
+    @unittest.skipUnless(have("node"), "node not installed")
+    def test_setfailed_without_a_comment_is_never_clean(self):
+        # Plenty of bots just call core.setFailed() and let the job status
+        # carry the message. The check RAN and FAILED - reporting CLEAN there
+        # is the exact failure this tool exists to prevent.
+        with open(os.path.join(self.repo, ".github", "scripts", "check-pr-description.js"), "w") as fh:
+            fh.write("module.exports = async ({core}) => { core.setFailed('missing DCO sign-off'); };\n")
+        r = prbody.check(self.repo, self._draft("## Summary\nplenty of text here\n\nFixes #1\n"))
+        self.assertNotEqual(r.code, EXIT_CLEAN)
+        self.assertTrue(any("missing DCO sign-off" in f.what for f in r.findings), [f.what for f in r.findings])
+
+    def test_punctuated_template_heading_is_not_falsely_missing(self):
+        # "Visual / UI changes" must match when the draft copies it verbatim.
+        repo = tempfile.mkdtemp()
+        os.makedirs(os.path.join(repo, ".github"))
+        with open(os.path.join(repo, ".github", "pull_request_template.md"), "w") as fh:
+            fh.write("## Summary\n\n## Visual / UI changes\n\n## Reviewer's notes\n")
+        body = os.path.join(repo, "d.md")
+        with open(body, "w") as fh:
+            fh.write("## Summary\nyes\n\n## Visual / UI changes\nnone\n\n## Reviewer's notes\nnone\n")
+        r = prbody.check(repo, body)
+        self.assertEqual(r.code, EXIT_CLEAN, [f.where for f in r.findings])
+
     def test_empty_draft_is_a_finding(self):
         r = prbody.check(self.repo, self._draft("   "))
         self.assertEqual(r.code, EXIT_FINDING)
@@ -165,8 +213,44 @@ class TestCi(unittest.TestCase):
         pin_or_perm = [f for f in r.findings if "mutable tag" in f.what or "no permissions block" in f.what]
         self.assertEqual(pin_or_perm, [], [f.what for f in pin_or_perm])
 
-    def test_no_workflows_is_clean(self):
-        self.assertEqual(ci.check(tempfile.mkdtemp(), audit=False).code, EXIT_CLEAN)
+    def test_no_workflows_still_audits_dependencies(self):
+        # A repo with no CI can still ship a vulnerable requirements.txt. The
+        # old early-return made that indistinguishable from an empty dir.
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "requirements.txt"), "w") as fh:
+            fh.write("requests==2.19.0\n")
+        r = ci.check(d, audit=False)
+        self.assertFalse(any("nothing to audit" in n for n in r.notes), r.notes)
+
+    def test_uppercase_sha_pin_is_not_a_finding(self):
+        d = self._repo(PINNED.replace("9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+                                      "9C091BB21B7C1C1D1991BB908D89E4E9DDDFE3E0"))
+        r = ci.check(d, audit=False)
+        self.assertFalse(any("mutable tag" in f.what for f in r.findings), [f.what for f in r.findings])
+
+    def test_no_sast_installed_is_not_clean(self):
+        # Only two greps ran; claiming CLEAN would mean "we looked".
+        d = self._repo(PINNED)
+        real = ci.have
+        ci.have = lambda t: False
+        try:
+            r = ci.check(d, audit=False)
+            self.assertNotEqual(r.code, EXIT_CLEAN)
+            self.assertTrue(any("no Actions SAST installed" in f.what for f in r.findings))
+        finally:
+            ci.have = real
+
+    def test_require_sast_keeps_findings_already_collected(self):
+        # A late INVALID must not discard real findings from --json output.
+        d = self._repo(UNPINNED)
+        real = ci.have
+        ci.have = lambda t: False
+        try:
+            r = ci.check(d, require_sast=True, audit=False)
+            self.assertEqual(r.code, EXIT_INVALID)
+            self.assertTrue(any("mutable tag" in f.what for f in r.findings), [f.what for f in r.findings])
+        finally:
+            ci.have = real
 
     def test_touching_a_workflow_routes_to_gha_review(self):
         # The routing contract is the `route` payload plus a judgment-severity
