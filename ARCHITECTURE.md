@@ -52,7 +52,7 @@ crosscheck/
   policies/               # hand-transcribed program policy JSON (see its README)
   specs/                  # hand-written enforce specs + fixtures (see its README)
                           #   .redruns.json = proof each control has been seen to FAIL
-  tests/                  # unittest; 134 tests, incl. suite-wide detector + provenance invariants
+  tests/                  # unittest; 137 tests, incl. suite-wide detector + provenance invariants
   install.sh              # ~/.local/bin/cc launcher + optional pre-push hook
 ```
 
@@ -134,6 +134,8 @@ because `ci` flags shell sinks in other people's code.
 | var | purpose |
 |-----|---------|
 | `CROSSCHECK_POLICIES` | override the `policies/` directory |
+| `CROSSCHECK_SPECS` | override the `specs/` directory (and the red-run ledger inside it) |
+| `CROSSCHECK_PROBE_AUDIT` | override the probe audit log path (default `~/.crosscheck/probe-audit.jsonl`) |
 | `CROSSCHECK_IDENTITIES` | extra emails that count as "you" for `pr-branch` |
 | `CROSSCHECK_USAGE_LOG` | override the decay log path |
 | `CROSSCHECK_BIN_DIR` | where `install.sh` puts the `cc` launcher |
@@ -201,7 +203,7 @@ regression runner (ghost blocks its own tester from inside an agent).
 
 ## last updated
 
-2026-08-09 — 7 checks, 134 tests, skill + adjudicate workflow, own CI.
+2026-08-09 — 7 checks, 137 tests, skill + adjudicate workflow, own CI.
 `enforce` added after the codecalc audit showed declared-vs-applied recurring across targets.
 Four adversarial review rounds + marko applied (32 defects fixed, incl. 10 false-CLEAN
 paths, a false-INELIGIBLE in `vrp`, and one unrecoverable data-loss path in `baseline`).
