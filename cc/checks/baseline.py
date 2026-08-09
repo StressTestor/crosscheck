@@ -39,7 +39,11 @@ CHECK = "baseline"
 # Deliberately conservative: a name we cannot parse is better than a wrong set.
 _PATTERNS = [
     # pytest:  FAILED tests/test_x.py::test_y - AssertionError
-    re.compile(r"^(?:FAILED|ERROR)\s+(\S+?)(?:\s+-.*)?$", re.M),
+    # The `[^\s(]` first char is load-bearing: unittest ends its run with
+    # `FAILED (failures=2)`, and capturing THAT as a test name makes the set
+    # difference compare failure COUNTS instead of test names - so a run with
+    # 2 failures vs 1 would report a fabricated "introduced" failure. >:[
+    re.compile(r"^(?:FAILED|ERROR)\s+([^\s(]\S*)(?:\s+-.*)?$", re.M),
     # unittest: FAIL: test_y (tests.test_x.Klass)
     re.compile(r"^(?:FAIL|ERROR):\s+(\S+\s*\([^)]+\))", re.M),
     # go test:  --- FAIL: TestThing (0.00s)

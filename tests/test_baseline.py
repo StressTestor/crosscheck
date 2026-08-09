@@ -38,6 +38,27 @@ class TestParseFailures(unittest.TestCase):
         # An empty set here is what drives the "harness error" INVALID path.
         self.assertEqual(baseline.parse_failures("Segmentation fault"), set())
 
+    def test_unittest_summary_line_is_not_a_test_name(self):
+        # Regression: unittest ends with `FAILED (failures=2)`. Capturing that
+        # made the set difference compare failure COUNTS, so a 2-vs-1 run
+        # fabricated an "introduced" failure out of nothing.
+        out = (
+            "FAIL: test_thing (tests.test_mod.Klass.test_thing)\n"
+            "----\n"
+            "Ran 73 tests in 7.0s\n"
+            "FAILED (failures=1)\n"
+        )
+        got = baseline.parse_failures(out)
+        self.assertNotIn("(failures=1)", got)
+        self.assertTrue(any("test_thing" in g for g in got), got)
+
+    def test_differing_failure_counts_do_not_fabricate_attribution(self):
+        dirty = "FAIL: test_a (m.K.test_a)\nFAIL: test_b (m.K.test_b)\nFAILED (failures=2)\n"
+        clean = "FAIL: test_a (m.K.test_a)\nFAILED (failures=1)\n"
+        introduced = baseline.parse_failures(dirty) - baseline.parse_failures(clean)
+        self.assertEqual(len(introduced), 1)
+        self.assertTrue(any("test_b" in i for i in introduced), introduced)
+
 
 def _git(d, *a):
     subprocess.run(["git", "-C", d, *a], check=True, capture_output=True)
