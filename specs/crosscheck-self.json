@@ -1,0 +1,46 @@
+{
+  "target": "crosscheck",
+  "description": "crosscheck probing itself: a scanner that analyzed nothing must never be credited as having run.",
+  "cwd": "/Volumes/T7/crosscheck",
+  "controls": [
+    {
+      "name": "sast-not-credited-without-analysis",
+      "declares": "cc ci --require-sast must not report CLEAN when zizmor/actionlint exit without analyzing, even though the audited repo owns their config files",
+      "probe": [
+        "python3",
+        "crosscheck.py",
+        "ci",
+        "specs/fixtures/junk-sast-config",
+        "--require-sast",
+        "--no-audit"
+      ],
+      "expect": "refused",
+      "refused_when": {
+        "exit_code_not_in": [
+          0
+        ],
+        "output_contains": "no Actions SAST produced an analysis"
+      },
+      "timeout": 300
+    },
+    {
+      "name": "clean-repo-still-passes",
+      "declares": "the control must not over-block: a genuinely clean, fully-pinned repo still returns CLEAN under --require-sast",
+      "probe": [
+        "python3",
+        "crosscheck.py",
+        "ci",
+        "/Volumes/T7/odysseus",
+        "--require-sast",
+        "--no-audit"
+      ],
+      "expect": "allowed",
+      "refused_when": {
+        "exit_code_not_in": [
+          0
+        ]
+      },
+      "timeout": 400
+    }
+  ]
+}

@@ -24,9 +24,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from cc.result import Result, emit, worst, EXIT_INVALID  # noqa: E402
 from cc import usage  # noqa: E402
-from cc.checks import baseline, prbranch, prbody, ci, scope, secrets, vrp  # noqa: E402
+from cc.checks import baseline, prbranch, prbody, ci, scope, secrets, vrp, enforce  # noqa: E402
 
-ALL_CHECKS = ["baseline", "pr-branch", "pr-body", "ci", "scope", "secrets", "vrp"]
+ALL_CHECKS = ["baseline", "pr-branch", "pr-body", "ci", "scope", "secrets", "vrp", "enforce"]
 
 # Profiles are sequencing, not new checks. Each is "what do I run before X".
 PROFILES = {
@@ -109,6 +109,12 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--changed", default="")
     rp.add_argument("--paths", nargs="*", default=[])
 
+    e = sub.add_parser("enforce", help="RUNS a local target: does a declared control actually engage, and does the target admit it when it does not")
+    e.add_argument("spec", help="spec name in specs/, or a path to a spec json")
+    e.add_argument("--only", action="append", default=[], help="run only these control names")
+    e.add_argument("--dry-run", action="store_true", help="print the probes without executing them")
+    e.add_argument("--timeout", type=int, default=120)
+
     d = sub.add_parser("decay", help="which checks have not fired - delete them")
     d.add_argument("--days", type=int, default=60)
 
@@ -133,6 +139,8 @@ def dispatch(a) -> list[Result]:
         return [secrets.check([_p(x) for x in a.paths], a.allow, a.history)]
     if a.cmd == "vrp":
         return [vrp.check(a.program, a.vuln_class, a.max_age_days)]
+    if a.cmd == "enforce":
+        return [enforce.check(a.spec, a.only, a.dry_run, a.timeout)]
     if a.cmd == "run":
         return run_profile(a)
     raise ValueError(a.cmd)

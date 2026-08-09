@@ -1,0 +1,10 @@
+# Fixture: a workflow zizmor WILL flag (dangerous trigger + template injection).
+# It exists so `cc enforce` can prove that malformed scanner configs cannot
+# suppress the finding. Not a real workflow - it never runs anywhere.
+name: fixture
+on: pull_request_target
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ github.event.pull_request.title }}"

@@ -12,6 +12,10 @@ severity bar excluded the class - after the PoC work was done.
 crosscheck runs the mechanical half of that memory. stdlib python, real exit
 codes, works from your shell, from CI, or from an agent.
 
+one module, `enforce`, actually runs the thing under test - everything else
+just reads artifacts. it exists because "control declared, control not applied,
+success reported anyway" showed up four times across two different targets.
+
 it does not review diffs, prove fixes, score duplicate risk, or re-lens GitHub
 Actions workflows. adv-gate, verify-change, dupe-gate and gha-security-review
 already do those, and this routes to them instead of copying them.
@@ -63,6 +67,7 @@ didn't run prints the same nothing as a check that passed.
 | `scope` | is this host really inside the program's scope |
 | `secrets` | is a live key sitting in my evidence dir or a vault-bound note |
 | `vrp` | is this class of bug even fileable here, before i build the PoC |
+| `enforce` | does a declared control actually engage - and does the target admit it when it doesn't |
 
 ## use it
 
@@ -85,6 +90,10 @@ cc secrets ./evidence --allow ./report.md
 # whole sweeps
 cc run oss-pr ~/repo --body draft.md --title "fix(x): y"
 cc run bounty-presubmit --program acme --vuln-class ssrf --paths ./evidence
+
+# does a declared control actually hold? RUNS the target. --dry-run first.
+cc enforce codecalc --dry-run
+cc enforce codecalc
 
 # every check speaks json, same envelope shape
 cc --json ci ~/repo
@@ -128,5 +137,5 @@ the other.
 python3 -m unittest discover -s tests -t .
 ```
 
-106 tests. real git repos, real subprocesses, and the adversarial cases are the
+118 tests. real git repos, real subprocesses, and the adversarial cases are the
 point - `notaneero.com` and `eero.com.attacker.net` both have to come back OUT.

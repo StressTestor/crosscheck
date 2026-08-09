@@ -50,10 +50,12 @@ crosscheck/
       scope.py            # suffix-anchored host-in-scope matcher
       secrets.py          # aims gitleaks at drafts/evidence/vault-bound notes
       vrp.py              # program eligibility BEFORE PoC effort
+      enforce.py          # RUNS a local target: declared-vs-applied control parity
   harness/
     pr_check_harness.js   # stubs github/context/core so a repo's bot runs offline
   policies/               # hand-transcribed program policy JSON (see its README)
-  tests/                  # unittest; 106 tests, real git repos and real subprocesses
+  specs/                  # hand-written enforce specs + fixtures (see its README)
+  tests/                  # unittest; 118 tests, real git repos and real subprocesses
   install.sh              # ~/.local/bin/cc launcher + optional pre-push hook
 ```
 
@@ -114,6 +116,15 @@ result, not a safety assertion.** What is guaranteed is containment: it cannot
 write your disk, spawn processes, or read your environment. `--trust-repo` drops
 even the containment, and says so in the output.
 
+**one module executes the target, and it says so.** Every check except
+`enforce` reads artifacts and never runs the thing under test. `cc enforce`
+launches a LOCAL target and feeds it probes that should be refused — invoking
+that subcommand IS the consent. It still never touches a remote host, and
+`--dry-run` prints the exact argv first. It exists because "control declared,
+control not applied, success reported anyway" recurred four times across two
+independent targets (codecalc #61/#62, and two of crosscheck's own review
+blockers), and reading code catches that class only sometimes.
+
 **the suite obeys its own rules.** `run.py` is argv-only with no `shell=True`,
 because `ci` flags shell sinks in other people's code.
 
@@ -161,6 +172,8 @@ because `ci` flags shell sinks in other people's code.
 | `ci` says a scanner "exited WITHOUT scanning" | malformed `.github/zizmor.yml` / `.github/actionlint.yaml`, or not a git repo | fix the config. it is deliberately not credited as a scan — the audited repo must not be able to disable its own audit |
 | `baseline` says changes are in the stash | `git stash pop` hit a conflict | resolve it by hand; the tool reports loudly rather than swallowing it |
 | `scope`/`vrp` INVALID for a program | no policy file | `cp policies/_template.json policies/<program>.json` and transcribe by hand |
+| `cc enforce` says UNTESTABLE | the spec has no `refused_when`, or it did not resolve | a refusal must be recognisable; exit code alone is not enough |
+| an `enforce` spec passes but never fails | the refusal rule matches for an unrelated reason | break the control on a throwaway copy and confirm it flips to UNENFORCED. see `specs/README.md` |
 | a `vrp` ruling looks wrong | policy is a hand transcript | every ruling prints its source quote — check the transcription, then the page |
 | actionlint noise about "no project found" | actionlint talking about itself outside a repo | already filtered; only `file:line:col:` findings are reported |
 
@@ -188,7 +201,8 @@ regression runner (ghost blocks its own tester from inside an agent).
 
 ## last updated
 
-2026-08-09 — initial build: 7 checks, 106 tests, skill + adjudicate workflow.
+2026-08-09 — initial build: 8 checks, 118 tests, skill + adjudicate workflow.
+`enforce` added after the codecalc audit showed declared-vs-applied recurring across targets.
 Four adversarial review rounds + marko applied (32 defects fixed, incl. 10 false-CLEAN
 paths, a false-INELIGIBLE in `vrp`, and one unrecoverable data-loss path in `baseline`).
 
