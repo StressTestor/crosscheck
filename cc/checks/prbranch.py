@@ -71,10 +71,14 @@ def check(
             # declares is the kind of helpfulness that hides a wrong answer.
             near = next(c for c in cands if c["branch"] == base_branch)
             far = next((c for c in cands if c["branch"] == declared), None)
-            r.note(
-                f"base: using {base_branch} ({near['ahead']} ahead), not the declared default "
-                f"{declared}" + (f" ({far['ahead']} ahead) - this branch is not cut from it" if far else "")
-            )
+            # Informative, not accusatory. A repo running two long-lived
+            # branches (odysseus: `dev` for maintainer work, `main` for
+            # contributions) is a normal setup, not a misconfiguration - the
+            # declared default is simply not the base for THIS branch.
+            detail = f"{base_branch} is {near['ahead']} ahead / {near['behind']} behind"
+            if far:
+                detail += f"; declared default {declared} is {far['ahead']} ahead / {far['behind']} behind"
+            r.note(f"base: {base_branch} (nearest by divergence, not the declared default) - {detail}")
 
     base_ref = f"{rem}/{base_branch}"
     if not G.git(repo, "rev-parse", "--verify", "--quiet", base_ref).ok:

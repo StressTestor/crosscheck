@@ -153,6 +153,40 @@ class TestPrBranch(unittest.TestCase):
             f"picked a different base silently: {r.notes}",
         )
 
+    def test_a_branch_cut_from_the_maintainer_branch_resolves_to_it(self):
+        # odysseus runs two long-lived branches: `dev` is the maintainer /
+        # integration branch and is the declared default, while contribution
+        # branches are cut from `main`. BOTH modes have to resolve correctly -
+        # a heuristic that always prefers the contribution base would be just as
+        # wrong for maintainer work as trusting the default was for contributions.
+        git(self.up, "checkout", "-qb", "dev")
+        for i in range(3):
+            with open(os.path.join(self.up, f"dev{i}.txt"), "w") as fh:
+                fh.write("x\n")
+            git(self.up, "add", "-A")
+            git(self.up, "commit", "-qm", f"maintainer work {i}")
+        git(self.up, "checkout", "-q", "master")
+        git(self.repo, "fetch", "-q", "upstream")
+        git(self.repo, "symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/dev")
+
+        # Cut a branch from dev, the way direct repo work would.
+        git(self.repo, "checkout", "-qB", "maint/thing", "upstream/dev")
+        with open(os.path.join(self.repo, "m.txt"), "w") as fh:
+            fh.write("x\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-qm", "maintainer change")
+
+        base, cands = G.plausible_base(self.repo, "upstream", "maint/thing", "dev")
+        self.assertEqual(base, "dev", f"maintainer branch did not resolve to dev: {cands}")
+
+        r = prbranch.check(self.repo, branch="maint/thing")
+        self.assertEqual(r.data["base"], "upstream/dev")
+        self.assertEqual(r.code, EXIT_CLEAN, [f.detail for f in r.findings])
+        self.assertFalse(
+            any("not the declared default" in n for n in r.notes),
+            "warned about a base change that did not happen",
+        )
+
     def test_declared_default_wins_when_it_is_the_nearest(self):
         # Discriminating: do not wander off the declared default for no reason.
         self._commit("Me", "me@mine.tld", "mine.txt")

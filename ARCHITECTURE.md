@@ -164,7 +164,7 @@ for exactly those.
 |---------|-------|-----|
 | `cc` exits 3 saying "suite not found" | `/Volumes/T7` unmounted | mount the drive. the launcher is a stub on the main disk so this is one sentence instead of a stack trace |
 | `pr-branch` reports hundreds of stray commits | the base is wrong | it now scores every candidate base by total divergence (ahead + behind) and says out loud when it picks one other than the declared default. override with `--base` |
-| `pr-branch` picked a base you did not expect | the repo's declared default is not what your branch was cut from | odysseus declares `dev` while contribution branches are cut from `main`. inspect `data.base_candidates` — it lists ahead/behind for every candidate |
+| `pr-branch` picked a base you did not expect | the repo runs two long-lived branches and the declared default is not this branch's base | normal, not a misconfiguration: odysseus declares `dev` (the maintainer/integration branch) while contribution branches are cut from `main`. the heuristic resolves both modes; inspect `data.base_candidates` for the ahead/behind of every candidate |
 | `ci` finds nothing on a bad repo | no SAST installed | `pipx install zizmor==1.25.2 && brew install actionlint`, or pass `--require-sast` to make the gap loud |
 | `baseline` says INVALID on a clean tree | nothing to compare | that is correct; use `verify-change` for a committed change |
 | `baseline` refuses over a dirty submodule | `git stash` does not recurse into submodules | commit or stash inside the submodule first — the alternative is running your suite over work nothing can restore |
