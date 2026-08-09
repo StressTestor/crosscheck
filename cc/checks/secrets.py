@@ -61,10 +61,12 @@ def _gitleaks_dir(path: str, r: Result) -> int:
                 n += 1
                 r.add(
                     Finding(
-                        what=f"possible secret: {row.get('RuleID', 'unknown rule')}",
+                        what="possible secret",
                         where=f"{row.get('File', '?')}:{row.get('StartLine', '?')}",
-                        detail=(row.get("Match") or "")[:120],  # gitleaks --redact already masked it
                         fix="remove it, rotate it, and keep it out of anything the vault hook pushes",
+                    ).with_foreign(
+                        "gitleaks",
+                        f"{row.get('RuleID', 'unknown rule')}: {(row.get('Match') or '')}",
                     )
                 )
         except (OSError, ValueError) as e:

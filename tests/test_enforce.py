@@ -202,6 +202,56 @@ class TestEnforce(unittest.TestCase):
         b["declares"] = "totally different prose"
         self.assertEqual(enforce.control_fingerprint(a), enforce.control_fingerprint(b))
 
+    def test_every_fired_probe_is_audited_with_a_hash_chain(self):
+        import tempfile as _tf
+        log = os.path.join(_tf.mkdtemp(), "probe-audit.jsonl")
+        os.environ[enforce.AUDIT_LOG_ENV] = log
+        try:
+            t = self._target(TARGET_ENFORCED)
+            c = self._nproc_control(t)
+            c["self_report"] = {}
+            enforce.check(self._spec(c, name="a"))
+            enforce.check(self._spec(c, name="b"))
+            rows = [json.loads(l) for l in open(log) if l.strip()]
+            self.assertEqual(len(rows), 2)
+            for row in rows:
+                self.assertEqual(row["argv"], [t])
+                self.assertIn("sentinel", row)
+                self.assertIn("spec_sha", row)
+            # chain links: each entry hashes the previous chain value
+            import hashlib as _h
+            prev = "0" * 64
+            for row in rows:
+                body = {k: v for k, v in row.items() if k != "chain"}
+                want = _h.sha256((prev + json.dumps(body, sort_keys=True)).encode()).hexdigest()
+                self.assertEqual(row["chain"], want, "audit chain does not verify")
+                prev = row["chain"]
+        finally:
+            os.environ.pop(enforce.AUDIT_LOG_ENV, None)
+
+    def test_dry_run_writes_no_audit_entry(self):
+        import tempfile as _tf
+        log = os.path.join(_tf.mkdtemp(), "probe-audit.jsonl")
+        os.environ[enforce.AUDIT_LOG_ENV] = log
+        try:
+            t = self._target(TARGET_ENFORCED)
+            enforce.check(self._spec(self._nproc_control(t)), dry_run=True)
+            self.assertFalse(os.path.exists(log), "dry-run wrote an audit entry")
+        finally:
+            os.environ.pop(enforce.AUDIT_LOG_ENV, None)
+
+    def test_unwritable_audit_log_refuses_to_fire(self):
+        # An unrecorded probe is a probe that fired silently. Fail closed.
+        marker = os.path.join(self.d, "fired")
+        t = self._target(f"#!/bin/sh\ntouch {marker}\nexit 1\n")
+        os.environ[enforce.AUDIT_LOG_ENV] = os.path.join(self.d, "target.sh", "nope.jsonl")
+        try:
+            r = enforce.check(self._spec(self._nproc_control(t)))
+            self.assertEqual(r.code, EXIT_INVALID)
+            self.assertFalse(os.path.exists(marker), "probe fired despite an unwritable audit log")
+        finally:
+            os.environ.pop(enforce.AUDIT_LOG_ENV, None)
+
     def test_missing_spec_is_invalid(self):
         self.assertEqual(enforce.check("nope").code, EXIT_INVALID)
 

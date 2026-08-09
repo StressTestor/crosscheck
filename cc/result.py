@@ -13,6 +13,15 @@ Judgment calls, written down because every module depends on them:
    this", never "probably fine".
 4. There is no code path that downgrades INVALID. If a check cannot run, it
    says so. It never returns CLEAN with a warning nobody reads.
+5. FOREIGN TEXT NEVER LANDS IN `what`. `what` is always crosscheck's own words.
+   Anything produced by the thing under test - a repo's PR bot, zizmor output,
+   a foreign test id, a probe's stderr - goes in `foreign`, where it is capped
+   and tagged at the single serialisation point below.
+
+   Why: `--json` is read by agents. Uncapped, unlabelled text from an untrusted
+   repo flowing into the same field crosscheck writes its own verdicts into is
+   a prompt-injection channel wearing a trusted envelope. The reader cannot
+   tell our sentence from theirs, which is the whole trick. >:[
 """
 
 from __future__ import annotations
@@ -27,6 +36,10 @@ EXIT_CLEAN = 0
 EXIT_FINDING = 2
 EXIT_INVALID = 3
 EXIT_JUDGMENT = 4
+
+# Foreign text is capped at emission. Long enough for a real message, short
+# enough that a wall of crafted text cannot bury the verdict around it.
+MAX_FOREIGN_BYTES = 600
 
 # Loudness order for worst-of aggregation. Higher wins. (¬‿¬) INVALID on top.
 _RANK = {EXIT_CLEAN: 0, EXIT_JUDGMENT: 1, EXIT_FINDING: 2, EXIT_INVALID: 3}
@@ -60,18 +73,45 @@ def worst(codes) -> int:
 
 @dataclass
 class Finding:
-    """One thing worth a human's attention. `where` is file:line when we have it."""
+    """One thing worth a human's attention. `where` is file:line when we have it.
+
+    `what` / `detail` / `fix` are crosscheck's own words. Text that came out of
+    the thing under test goes in `foreign` via `with_foreign()`, never here.
+    """
 
     what: str
     where: str = ""
     detail: str = ""
     fix: str = ""
     severity: str = "finding"  # finding | judgment | invalid
+    # {"source": str, "text": str, "bytes": int, "truncated": bool}
+    foreign: dict | None = None
+
+    def with_foreign(self, source: str, text: str) -> "Finding":
+        """Attach text produced by the target. Capped and tagged here, once."""
+        raw = text or ""
+        capped = raw[:MAX_FOREIGN_BYTES]
+        self.foreign = {
+            "source": source,
+            "text": capped,
+            "bytes": len(raw),
+            "truncated": len(raw) > MAX_FOREIGN_BYTES,
+        }
+        return self
 
     def line(self) -> str:
         head = f"{self.where}: {self.what}" if self.where else self.what
         if self.detail:
             head += f"\n    {self.detail}"
+        if self.foreign:
+            f = self.foreign
+            tail = " [truncated]" if f["truncated"] else ""
+            # Marked on every line so a multi-line payload cannot walk out of
+            # its own quoting and impersonate crosscheck's voice.
+            body = "\n".join(
+                f"    | {ln}" for ln in f["text"].splitlines()[:12]
+            ) or "    | (empty)"
+            head += f"\n    untrusted output from {f['source']} ({f['bytes']} bytes{tail}):\n{body}"
         if self.fix:
             head += f"\n    fix: {self.fix}"
         return head

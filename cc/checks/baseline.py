@@ -237,13 +237,13 @@ def check(repo: str, suite_argv: list[str], timeout: int = 900, as_dict=None) ->
         r.note(f"your change FIXES {len(fixed)}: {', '.join(fixed[:10])}")
 
     for t in introduced:
+        # The test id came out of someone else's suite - foreign text.
         r.add(
             Finding(
                 what="test fails only with your changes applied",
-                where=t,
                 detail="absent from the stashed-clean run, so it is NOT pre-existing",
                 fix="fix it, or prove it is environmental by re-running on another machine",
-            )
+            ).with_foreign("test suite", t)
         )
     if not introduced:
         r.note("no failure is attributable to the working-tree changes")

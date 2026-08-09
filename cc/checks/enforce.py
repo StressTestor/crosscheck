@@ -60,7 +60,7 @@ import json
 import os
 
 from ..result import Result, Finding
-from ..run import run
+from ..run import run, have
 
 CHECK = "enforce"
 
@@ -133,6 +133,87 @@ def _record_red(control: dict, verdict: str) -> None:
             json.dump(led, fh, indent=2, sort_keys=True)
     except OSError:
         pass
+
+
+AUDIT_LOG_ENV = "CROSSCHECK_PROBE_AUDIT"
+_DEFAULT_AUDIT = os.path.join(os.path.expanduser("~"), ".crosscheck", "probe-audit.jsonl")
+
+
+def audit_path() -> str:
+    return os.environ.get(AUDIT_LOG_ENV) or _DEFAULT_AUDIT
+
+
+def _sentinel_verdict(argv: list[str]) -> str:
+    """Ask the local guard what it thinks of this probe. NON-BLOCKING.
+
+    enforce's probes are subprocess argv, so sentinel/ghost - a PreToolUse hook
+    on the agent's Bash tool - never sees them. That is a blind spot in the one
+    module built to run hostile input, so we hand the guard the argv on the way
+    past and RECORD its opinion.
+
+    Deliberately an oracle, never a veto: a guard that can refuse probes turns
+    every DENY into UNTESTABLE-forever, which is the exact defect that killed
+    the guard-corpus module. Recording preserves discrimination; blocking
+    destroys it. (¬‿¬)
+    """
+    if not have("sentinel"):
+        return "unavailable"
+    p = run(["sentinel", "check", "--", *argv], timeout=30)
+    if p.timed_out:
+        return "timeout"
+    if p.code == 0:
+        return "allow"
+    return f"deny({p.code})"
+
+
+def _audit(argv: list[str], cwd: str | None, spec_sha: str, verdict: str) -> str | None:
+    """Hash-chained append-only record. Returns an error string, or None.
+
+    Tamper-EVIDENCE and legibility, NOT an authorization boundary: this runs as
+    the same user that could rewrite the file. It exists so a probe that fired
+    cannot fire silently, and so an unexpected argv is visible after the fact.
+    An agent that authors a hostile spec AND commits it defeats it entirely -
+    ordinary review of spec diffs is the only control on that, and the docs say
+    so rather than implying coverage. XX
+    """
+    path = audit_path()
+    try:
+        prev = "0" * 64
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as fh:
+                for ln in fh:
+                    if ln.strip():
+                        last = ln
+                try:
+                    prev = json.loads(last).get("chain", prev)
+                except (ValueError, UnboundLocalError):
+                    pass
+        entry = {
+            "ts": _now_iso(),
+            "argv": argv,
+            "cwd": cwd or "",
+            "spec_sha": spec_sha,
+            "sentinel": verdict,
+        }
+        entry["chain"] = hashlib.sha256(
+            (prev + json.dumps(entry, sort_keys=True)).encode()
+        ).hexdigest()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # O_APPEND so concurrent runs cannot interleave a partial line.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            os.write(fd, (json.dumps(entry) + "\n").encode())
+        finally:
+            os.close(fd)
+        return None
+    except OSError as e:
+        return str(e)
+
+
+def _now_iso() -> str:
+    import datetime as _dt
+
+    return _dt.datetime.now().isoformat(timespec="seconds")
 
 
 def load_spec(path_or_name: str) -> tuple[dict | None, str | None]:
@@ -284,6 +365,8 @@ def check(
     wanted = set(only or [])
     verdicts = {}
     ledger = _load_ledger()
+    spec_sha = hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()[:16]
+    r.data["spec_sha"] = spec_sha
 
     for control in controls:
         name = control.get("name") or "(unnamed)"
@@ -309,7 +392,36 @@ def check(
             verdicts[name] = "DRY-RUN"
             continue
 
-        p = run(probe, cwd=cwd, timeout=control.get("timeout", timeout))
+        verdict = _sentinel_verdict(probe)
+        audit_err = _audit(probe, cwd, spec_sha, verdict)
+        if audit_err:
+            # Fail closed on audit failure ONLY. An unrecorded probe is a probe
+            # that fired silently, which is the thing this is for.
+            r.add(
+                Finding(
+                    what=f"{name}: refusing to fire - the probe audit log could not be written",
+                    detail=f"{audit_path()}: {audit_err}",
+                    fix="fix the log path or permissions; enforce will not execute unrecorded",
+                    severity="invalid",
+                )
+            )
+            verdicts[name] = UNTESTABLE
+            continue
+        if verdict.startswith("deny"):
+            r.note(f"{name}: sentinel would DENY this probe (recorded, not blocked)")
+
+        # inherit_env=False is the one thing that ported out of pr-body's
+        # sandbox when it was deleted: a probe gets PATH and whatever the spec
+        # names, never the operator's environment. The rest of that sandbox
+        # (node --permission, the vm require-guard) was JS-runtime containment
+        # and has nothing to contain here - enforce fires argv subprocesses.
+        p = run(
+            probe,
+            cwd=cwd,
+            timeout=control.get("timeout", timeout),
+            env=control.get("env") or None,
+            inherit_env=False,
+        )
         if p.timed_out:
             r.add(
                 Finding(
@@ -330,7 +442,7 @@ def check(
                     detail=why or "refused_when did not resolve",
                     fix="give the control a refused_when rule that names how a refusal looks",
                     severity="invalid",
-                )
+                ).with_foreign("probe output", p.text())
             )
             verdicts[name] = UNTESTABLE
             continue

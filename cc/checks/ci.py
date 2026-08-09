@@ -194,7 +194,12 @@ def check(
             m = _ACTIONLINT_RE.match(ln)
             if m:
                 saw_real = True
-                r.add(Finding(what="actionlint", where=m.group(1), detail=ln))
+                r.add(
+                    Finding(
+                        what="actionlint reported a workflow issue",
+                        where=m.group(1),
+                    ).with_foreign("actionlint", ln)
+                )
             elif "no project was found" in ln or ln.startswith("actionlint:"):
                 r.note(f"actionlint: {ln}")
         if not saw_real and p.code not in (0, 1):
@@ -212,12 +217,18 @@ def check(
             r.note("zizmor timed out - NOT counted as a scanner that ran")
         elif p.code in (0, 14):
             sast_ran.append("zizmor")
-        else:
-            r.note(f"zizmor exited {p.code} WITHOUT scanning: " + (p.text().strip()[-200:] or "(no output)"))
+            # Parse in the RAN branch. This loop briefly lived under `else`,
+            # which meant findings were read only when zizmor FAILED and
+            # silently dropped on exit 14 - the exact false-CLEAN this module
+            # exists to prevent, reintroduced during a refactor. XX
             for ln in p.text().splitlines():
                 s = ln.strip()
                 if re.match(r"^(error|warning|note)\[", s):
-                    r.add(Finding(what="zizmor", detail=s))
+                    r.add(
+                        Finding(what="zizmor reported a workflow issue").with_foreign("zizmor", s)
+                    )
+        else:
+            r.note(f"zizmor exited {p.code} WITHOUT scanning: " + (p.text().strip()[-200:] or "(no output)"))
     r.data["sast"] = sast_ran
 
     if require_sast and not sast_ran:
@@ -276,9 +287,8 @@ def check(
                                 Finding(
                                     what="vulnerable python dependency",
                                     where=f"{dep.get('name', '?')}=={dep.get('version', '?')}",
-                                    detail=ids,
                                     fix=f"upgrade to: {fixes}",
-                                )
+                                ).with_foreign("pip-audit", ids)
                             )
         elif req:
             r.add(
@@ -328,9 +338,8 @@ def check(
                         r.add(
                             Finding(
                                 what=f"npm audit: {high} high/critical advisory(ies)",
-                                detail=", ".join(names),
                                 fix="npm audit fix, or pin the transitive dep",
-                            )
+                            ).with_foreign("npm audit", ", ".join(names))
                         )
 
     # ---- route, do not re-lens -------------------------------------------

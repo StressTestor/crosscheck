@@ -45,17 +45,15 @@ crosscheck/
     checks/
       baseline.py         # dirty-vs-clean failing-set diff
       prbranch.py         # replayed/stray commits vs upstream default
-      prbody.py           # runs the target repo's OWN description bot
       ci.py               # Actions pins/permissions + SAST delegation + routing
       scope.py            # suffix-anchored host-in-scope matcher
       secrets.py          # aims gitleaks at drafts/evidence/vault-bound notes
       vrp.py              # program eligibility BEFORE PoC effort
       enforce.py          # RUNS a local target: declared-vs-applied control parity
-  harness/
-    pr_check_harness.js   # stubs github/context/core so a repo's bot runs offline
   policies/               # hand-transcribed program policy JSON (see its README)
   specs/                  # hand-written enforce specs + fixtures (see its README)
-  tests/                  # unittest; 122 tests, real git repos and real subprocesses
+                          #   .redruns.json = proof each control has been seen to FAIL
+  tests/                  # unittest; 123 tests, real git repos and real subprocesses
   install.sh              # ~/.local/bin/cc launcher + optional pre-push hook
 ```
 
@@ -68,6 +66,16 @@ agent surface, outside this repo:
 ```
 
 ## key patterns
+
+**foreign text never lands in `what`.** `--json` is read by agents, so text
+produced by the thing under test — a scanner's output, a foreign test id, a
+probe's stderr — goes in a separate `foreign` field, capped at 600 bytes and
+tagged `{source, bytes, truncated}` at the single serialisation point in
+`result.py`. `what`/`detail`/`fix` are always crosscheck's own words. Human
+output prefixes every foreign line with `|` so a multi-line payload cannot walk
+out of its quoting and impersonate a verdict. Uncapped, unlabelled repo text
+flowing into the same field crosscheck writes its verdicts into is a
+prompt-injection channel wearing a trusted envelope.
 
 **four exit codes, not two.** `0 CLEAN / 2 FINDING / 3 INVALID / 4 JUDGMENT`.
 `1` is reserved so an uncaught traceback can never read as a verdict.
@@ -88,33 +96,6 @@ around within a week, and a rule routed around once is gone.
 
 **data over code.** `policies/` are versioned JSON. adding a program is a data
 change with a test, not a code change.
-
-**untrusted code runs sandboxed — and be precise about which layer holds.**
-`pr-body` executes JavaScript out of a cloned repo, which for a repo you pulled
-an hour ago to audit is attacker-controlled code. There are two layers and they
-are **not** equally strong:
-
-| layer | what it is | does it hold? |
-|-------|-----------|---------------|
-| `node --permission` + `inherit_env=False` | OS-level: no fs writes, no `child_process`, no worker threads, and an environment containing only `PATH` and the `CC_*` values we chose | **yes** — verified surviving a full context escape |
-| the `vm` context (deny-by-default `require`, stubbed globals) | in-process | **no** — `this.constructor.constructor('return process')()` walks out in one line, and reaches the real `require` |
-
-Node's own docs say `vm` is not a security mechanism, and it was demonstrated
-against this harness. It is kept as defence in depth and as a clean error for
-honest checkers that reach too far — never as the boundary. The boundary is that
-an escape arrives somewhere with nothing worth taking.
-
-The CommonJS loader is bypassed deliberately: it walks parent directories for
-`package.json`, so a filesystem allowlist tight enough to matter also breaks the
-load.
-
-**What this means for the verdict:** a hostile checker shares the process and can
-write its own JSON to stdout and `process.exit(0)`, forging a CLEAN. In-process
-verdict integrity against hostile code is not winnable, so the suite does not
-pretend to it. **`pr-body` CLEAN on a repo you do not trust is a convenience
-result, not a safety assertion.** What is guaranteed is containment: it cannot
-write your disk, spawn processes, or read your environment. `--trust-repo` drops
-even the containment, and says so in the output.
 
 **one module executes the target, and it says so.** Every check except
 `enforce` reads artifacts and never runs the thing under test. `cc enforce`
@@ -163,9 +144,6 @@ because `ci` flags shell sinks in other people's code.
 |---------|-------|-----|
 | `cc` exits 3 saying "suite not found" | `/Volumes/T7` unmounted | mount the drive. the launcher is a stub on the main disk so this is one sentence instead of a stack trace |
 | `pr-branch` reports hundreds of stray commits | the resolved base is wrong | `git remote set-head <remote> --auto`, or pass `--base`. the tool refuses to guess `main` |
-| `pr-body` is INVALID on a repo with a bot | node not installed | `brew install node` — without it the repo's real gate cannot run |
-| `pr-body` INVALID: "tried to require('fs')" | the repo's checker reached outside the sandbox | that checker needs more surface than a description bot should. read it before passing `--trust-repo` |
-| `pr-body` INVALID: "checker process exited N" | the repo's bot crashed (often an uncaught async throw) | read its stderr in the finding detail. a dead checker is never reported as a passing one |
 | `ci` finds nothing on a bad repo | no SAST installed | `pipx install zizmor==1.25.2 && brew install actionlint`, or pass `--require-sast` to make the gap loud |
 | `baseline` says INVALID on a clean tree | nothing to compare | that is correct; use `verify-change` for a committed change |
 | `baseline` refuses over a dirty submodule | `git stash` does not recurse into submodules | commit or stash inside the submodule first — the alternative is running your suite over work nothing can restore |
@@ -189,6 +167,7 @@ would mean two answers that drift:
 | duplicate-risk scoring | `dupe-gate` |
 | the six adversarial GHA lenses | `gha-security-review` |
 | filesystem path boundaries | `scopeguard` (`/Volumes/T7/scopeguard`) |
+| running a repo's own PR-description bot | the repo's CI, which already runs it |
 | running recon | `scopecreep` |
 | repo liveness / anti-AI-policy scan | `oss-scout-nonsec` |
 | touching a **bounty/scan target** | no subcommand ever sends a packet to a target host. two documented exceptions, both to infrastructure you already trust: `pr-branch` may run `git ls-remote` against your configured remote (pass `--base` to avoid it), and `cc ci`'s dependency audit queries the npm/PyPI advisory APIs (pass `--no-audit` to avoid it) |
@@ -201,17 +180,31 @@ regression runner (ghost blocks its own tester from inside an agent).
 
 ## last updated
 
-2026-08-09 — initial build: 8 checks, 118 tests, skill + adjudicate workflow.
+2026-08-09 — 7 checks, 123 tests, skill + adjudicate workflow.
 `enforce` added after the codecalc audit showed declared-vs-applied recurring across targets.
 Four adversarial review rounds + marko applied (32 defects fixed, incl. 10 false-CLEAN
 paths, a false-INELIGIBLE in `vrp`, and one unrecoverable data-loss path in `baseline`).
 
 **Known, accepted limits** (documented rather than papered over):
-- a hostile repo's PR checker shares the harness process and can forge a CLEAN
-  `pr-body` verdict line. containment (no writes/exec/env) holds; verdict
-  integrity against hostile code does not, and is not claimed.
-- `--allow-fs-read` confinement can be widened by symlinks planted inside the
-  audited repo, so treat `pr-body` reads on an untrusted repo as best-effort.
+- **`cc enforce` executes probes in a blind spot the local PreToolUse guard
+  cannot see.** sentinel/ghost inspects the *agent's Bash tool* command line;
+  enforce's probes are subprocess argv from inside python, so their argv is
+  never shown to it. Verified: a probe attempting to read `/etc/shadow` reached
+  the target and ran, in a session where the same guard blocked the agent five
+  separate times for less (`specs/_guard-canary.json` is the standing
+  regression). Mitigation is **instrumentation, not containment**: every probe
+  is put past `sentinel check` as a NON-BLOCKING oracle and appended to a
+  hash-chained log at `~/.crosscheck/probe-audit.jsonl` before it fires, and an
+  unwritable log refuses the run. That is tamper-evidence and legibility, **not
+  an authorization boundary** — it runs as the same user who could rewrite the
+  file. An agent that authors a hostile spec *and commits it* defeats it
+  entirely; ordinary review of spec diffs is the only control on that case.
+- **`specs/.redruns.json` is a discipline record, not a security boundary.**
+  Anyone who can edit a spec can edit it. It exists to stop honest mistakes.
 - `ci`'s `uses:`/`permissions:` greps are line-oriented, not YAML-aware; a
   `uses:` string inside a `run: |` block can be misread. zizmor/actionlint are
   the YAML-aware authority and run alongside.
+- the payout `floor` for `google-oss-vrp` was transcribed from Google-domain
+  search summaries, **not machine-read** from the published table (both primary
+  pages are JS-rendered and return title-only to a fetch). Re-verify before
+  letting a `$0` verdict talk you out of real work.

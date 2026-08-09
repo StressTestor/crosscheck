@@ -24,14 +24,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from cc.result import Result, emit, worst, EXIT_INVALID  # noqa: E402
 from cc import usage  # noqa: E402
-from cc.checks import baseline, prbranch, prbody, ci, scope, secrets, vrp, enforce  # noqa: E402
+from cc.checks import baseline, prbranch, ci, scope, secrets, vrp, enforce  # noqa: E402
 
-ALL_CHECKS = ["baseline", "pr-branch", "pr-body", "ci", "scope", "secrets", "vrp", "enforce"]
+ALL_CHECKS = ["baseline", "pr-branch", "ci", "scope", "secrets", "vrp", "enforce"]
 
 # Profiles are sequencing, not new checks. Each is "what do I run before X".
 PROFILES = {
-    "oss-pr": ["pr-branch", "pr-body", "ci"],
-    "odysseus-pr": ["pr-branch", "pr-body", "ci"],
+    "oss-pr": ["pr-branch", "ci"],
+    "odysseus-pr": ["pr-branch", "ci"],
     "bounty-presubmit": ["secrets", "vrp"],
     "repo-audit": ["ci", "secrets"],
 }
@@ -72,13 +72,6 @@ def build_parser() -> argparse.ArgumentParser:
     pb.add_argument("--base", help="override the resolved default branch")
     pb.add_argument("--max-commits", type=int, default=prbranch.SANE_COMMIT_CEILING)
 
-    pd = sub.add_parser("pr-body", help="run the target repo's OWN description checker on your draft")
-    pd.add_argument("repo")
-    pd.add_argument("body", help="path to the drafted PR body markdown")
-    pd.add_argument("--title")
-    pd.add_argument("--strict-title", action="store_true")
-    pd.add_argument("--trust-repo", action="store_true", help="run the repo's checker UNSANDBOXED (only for repos you trust)")
-
     c = sub.add_parser("ci", help="Actions supply-chain pass (delegates to zizmor/actionlint), routes deep review")
     c.add_argument("repo")
     c.add_argument("--changed", default="", help="comma-separated changed files, to trigger routing")
@@ -98,6 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("program")
     v.add_argument("vuln_class")
     v.add_argument("--max-age-days", type=int, default=vrp.DEFAULT_MAX_AGE_DAYS)
+    v.add_argument("--tier", help="the target project's program tier (e.g. OT2), for the payout floor")
 
     rp = sub.add_parser("run", help="a named profile (sequencing only, no new checks)")
     rp.add_argument("profile", choices=sorted(PROFILES))
@@ -129,8 +123,6 @@ def dispatch(a) -> list[Result]:
         return [baseline.check(_p(a.repo), argv, timeout=a.timeout)]
     if a.cmd == "pr-branch":
         return [prbranch.check(_p(a.repo), a.branch, a.remote, a.base, a.max_commits)]
-    if a.cmd == "pr-body":
-        return [prbody.check(_p(a.repo), _p(a.body), a.title, a.strict_title, a.trust_repo)]
     if a.cmd == "ci":
         changed = [x.strip() for x in a.changed.split(",") if x.strip()]
         return [ci.check(_p(a.repo), changed, a.require_sast, not a.no_audit)]
@@ -139,7 +131,7 @@ def dispatch(a) -> list[Result]:
     if a.cmd == "secrets":
         return [secrets.check([_p(x) for x in a.paths], a.allow, a.history)]
     if a.cmd == "vrp":
-        return [vrp.check(a.program, a.vuln_class, a.max_age_days)]
+        return [vrp.check(a.program, a.vuln_class, a.max_age_days, tier=a.tier)]
     if a.cmd == "enforce":
         return [enforce.check(a.spec, a.only, a.dry_run, a.timeout, a.record_red)]
     if a.cmd == "run":
@@ -154,11 +146,6 @@ def run_profile(a) -> list[Result]:
     for name in PROFILES[a.profile]:
         if name == "pr-branch":
             out.append(prbranch.check(repo))
-        elif name == "pr-body":
-            if not a.body:
-                out.append(Result.invalid("pr-body", "profile needs --body <draft.md>"))
-            else:
-                out.append(prbody.check(repo, _p(a.body), a.title, False))
         elif name == "ci":
             out.append(ci.check(repo, changed))
         elif name == "secrets":

@@ -1,0 +1,42 @@
+{
+  "_provenance": "Transcribed 2026-08-09 from Google Bug Hunters search results for the 2026 OSS VRP rule update. NOTE: both primary pages are JS-rendered and returned title-only to a direct fetch, so the tier/class rows below were sourced from Google-domain search summaries, NOT machine-read from the published table. Re-verify against the live rules page before relying on a $0 verdict to skip work.",
+  "program": "google-oss-vrp",
+  "policy_url": "https://bughunters.google.com/about/rules/open-source/google-open-source-software-vulnerability-reward-program-rules",
+  "fetched_at": "2026-08-09",
+
+  "in_scope": ["github.com/google", "github.com/GoogleCloudPlatform"],
+  "out_of_scope": [],
+
+  "severity_bar": "tier-dependent: see floor. OT2/OT3 pay nothing for product vulnerabilities or other security issues.",
+  "eligible_classes": ["supply chain compromise", "product vulnerability", "other security issue"],
+  "below_bar_classes": [],
+  "ineligible_classes": [],
+
+  "floor": {
+    "source_url": "https://bughunters.google.com/blog/ossvrp-rule-updates-2026",
+    "fetched_at": "2026-08-09",
+    "tiers": {
+      "OT0": "Flagship - e.g. Bazel, Angular, Golang",
+      "OT1": "Important - high-impact projects with significant community footprint",
+      "OT2": "Standard - active, stable projects, often in major package managers",
+      "OT3": "Low-Priority - small, experimental, or sample projects"
+    },
+    "unrewarded": [
+      {
+        "tier": "OT2",
+        "classes": ["product vulnerability", "other security issue"],
+        "quote": "For lower tiers (OT2 and OT3), Google no longer provides monetary rewards or credit for Product Vulnerabilities or Other Security Issues."
+      },
+      {
+        "tier": "OT3",
+        "classes": ["product vulnerability", "other security issue"],
+        "quote": "For lower tiers (OT2 and OT3), Google no longer provides monetary rewards or credit for Product Vulnerabilities or Other Security Issues."
+      }
+    ],
+    "notes": [
+      "OT2's maximum reward for Supply Chain Compromises was lowered in the same update.",
+      "OT0/OT1 memory-corruption reports now require exact OSS-Fuzz reproduction steps against an existing fuzz target, or a merged patch.",
+      "The stated driver was a surge of low-quality and AI-generated reports, plus technically-valid findings with negligible impact or unreachable code paths."
+    ]
+  }
+}

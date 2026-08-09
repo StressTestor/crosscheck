@@ -3,7 +3,7 @@
 i kept doing the same handful of checks by hand before every PR, every push,
 every bounty submission. and then forgetting one.
 
-the PR body that fails the repo's template bot on first submission. the branch
+the branch
 that replays 13 of someone else's commits because it got rebased instead of
 refreshed. the failing test called "pre-existing" without ever stashing and
 re-running. three PoC-confirmed findings that closed $0 because the program's
@@ -62,7 +62,6 @@ didn't run prints the same nothing as a check that passed.
 |-------|--------------------|
 | `baseline` | is that failure actually pre-existing, or did i cause it |
 | `pr-branch` | is my branch about to replay someone else's commits |
-| `pr-body` | would this repo's own description bot reject my draft |
 | `ci` | are the actions pinned, the tokens scoped, the deps clean |
 | `scope` | is this host really inside the program's scope |
 | `secrets` | is a live key sitting in my evidence dir or a vault-bound note |
@@ -76,19 +75,16 @@ didn't run prints the same nothing as a check that passed.
 cc baseline ~/repo -- pytest -q
 cc pr-branch ~/repo
 
-# run the target repo's OWN pr-description bot against your draft, offline
-cc pr-body /Volumes/T7/odysseus draft.md --title "fix(rag): skip hidden dirs"
-
 # actions supply chain, delegating to zizmor + actionlint
 cc ci ~/repo --changed core/x.py,.github/workflows/ci.yml
 
 # bounty side
 cc scope acme api.acme.com notanacme.com
-cc vrp acme "denial of service"
+cc vrp google-oss-vrp "product vulnerability" --tier OT2   # $0? ask BEFORE the PoC
 cc secrets ./evidence --allow ./report.md
 
 # whole sweeps
-cc run oss-pr ~/repo --body draft.md --title "fix(x): y"
+cc run oss-pr ~/repo
 cc run bounty-presubmit --program acme --vuln-class ssrf --paths ./evidence
 
 # does a declared control actually hold? RUNS the target. --dry-run first.
@@ -137,5 +133,5 @@ the other.
 python3 -m unittest discover -s tests -t .
 ```
 
-122 tests. real git repos, real subprocesses, and the adversarial cases are the
+123 tests. real git repos, real subprocesses, and the adversarial cases are the
 point - `notaneero.com` and `eero.com.attacker.net` both have to come back OUT.

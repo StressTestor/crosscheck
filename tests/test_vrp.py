@@ -112,6 +112,64 @@ class TestVrp(unittest.TestCase):
         r = vrp.check("p", "dns hijack", today=self.today)
         self.assertEqual(r.code, EXIT_CLEAN)
 
+    def _floor_policy(self, name="g"):
+        self._policy(
+            name,
+            eligible_classes=["product vulnerability"],
+            floor={
+                "source_url": "https://example.invalid/rules",
+                "unrewarded": [
+                    {"tier": "OT2", "classes": ["product vulnerability"], "quote": "no reward at OT2"},
+                    {"tier": "OT3", "classes": ["product vulnerability"], "quote": "no reward at OT3"},
+                ],
+            },
+        )
+        return name
+
+    def test_class_unrewarded_at_this_tier_is_a_finding(self):
+        # The corpus's largest realized loss: three PoC-confirmed osv-scalibr
+        # findings closed $0 because the class pays nothing at that tier.
+        r = vrp.check(self._floor_policy(), "product vulnerability", tier="OT2", today=self.today)
+        self.assertEqual(r.code, EXIT_FINDING)
+        self.assertTrue(any("pays NOTHING at tier OT2" in f.what for f in r.findings))
+        self.assertTrue(any("no reward at OT2" in (f.detail or "") for f in r.findings))
+
+    def test_same_class_at_a_rewarded_tier_is_clean(self):
+        # Discriminating: the floor must not blanket-block the class.
+        r = vrp.check(self._floor_policy(), "product vulnerability", tier="OT0", today=self.today)
+        self.assertEqual(r.code, EXIT_CLEAN, [f.what for f in r.findings])
+
+    def test_no_tier_is_judgment_never_a_guess(self):
+        r = vrp.check(self._floor_policy(), "product vulnerability", today=self.today)
+        self.assertEqual(r.code, EXIT_JUDGMENT)
+        self.assertTrue(any("none was given" in f.what for f in r.findings))
+
+    def test_tier_without_a_floor_table_is_judgment(self):
+        self._policy("nofloor", eligible_classes=["ssrf"])
+        r = vrp.check("nofloor", "ssrf", tier="OT2", today=self.today)
+        self.assertEqual(r.code, EXIT_JUDGMENT)
+        self.assertTrue(any("no floor table" in f.what for f in r.findings))
+
+    def test_floor_matching_runs_broad_to_narrow_only(self):
+        # A BROAD policy class covers a NARROWER ask: if 'xss' pays nothing,
+        # neither does 'self-xss'. Same rule that lets 'ssrf' cover 'blind ssrf'.
+        self._policy(
+            "g2",
+            eligible_classes=["self-xss"],
+            floor={"unrewarded": [{"tier": "OT2", "classes": ["xss"], "quote": "q"}]},
+        )
+        self.assertEqual(vrp.check("g2", "self-xss", tier="OT2", today=self.today).code, EXIT_FINDING)
+
+        # But a NARROW policy class must not rule on the BROADER ask - a floor
+        # on 'self-xss' says nothing about xss generally.
+        self._policy(
+            "g3",
+            eligible_classes=["xss"],
+            floor={"unrewarded": [{"tier": "OT2", "classes": ["self-xss"], "quote": "q"}]},
+        )
+        r = vrp.check("g3", "xss", tier="OT2", today=self.today)
+        self.assertEqual(r.code, EXIT_CLEAN, [f.what for f in r.findings])
+
     def test_missing_fetched_at_is_judgment(self):
         self._policy("p", fetched_at="")
         r = vrp.check("p", "ssrf", today=self.today)
