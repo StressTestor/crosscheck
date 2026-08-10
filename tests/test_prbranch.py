@@ -90,17 +90,26 @@ class TestPrBranch(unittest.TestCase):
         finally:
             os.environ.pop("CROSSCHECK_IDENTITIES", None)
 
-    def test_coauthored_commit_is_not_a_stray(self):
-        # A pair-programmed commit authored by a collaborator but crediting you
-        # via GitHub's Co-authored-by trailer is yours. The old advice was to
-        # cherry-pick "only your shas", i.e. drop it.
+    def test_coauthored_by_trailer_is_evidence_not_proof(self):
+        # SECURITY: a Co-authored-by trailer is commit-BODY text. Anyone can
+        # write your email into their own commit. Treating it as identity proof
+        # (as this check briefly did) is an attacker-controlled bypass of the
+        # only authorship signal there is. It must be surfaced, never trusted.
         with open(os.path.join(self.repo, "pair.txt"), "w") as fh:
             fh.write("x\n")
         git(self.repo, "add", "-A")
-        git(self.repo, "-c", "user.name=Pair", "-c", "user.email=pair@elsewhere.tld",
-            "commit", "-qm", "pair work\n\nCo-authored-by: Me <me@mine.tld>")
+        git(self.repo, "-c", "user.name=Mallory", "-c", "user.email=mallory@evil.tld",
+            "commit", "-qm", "looks helpful\n\nCo-authored-by: Me <me@mine.tld>")
         r = prbranch.check(self.repo)
-        self.assertEqual(r.code, EXIT_CLEAN, [f.detail for f in r.findings])
+        self.assertEqual(r.code, EXIT_FINDING, "a self-asserted trailer suppressed a foreign commit")
+        self.assertTrue(
+            any("NOT proof" in (f.detail or "") for f in r.findings),
+            [f.detail for f in r.findings],
+        )
+        # And the attacker-controlled text must be quarantined, not inlined.
+        self.assertTrue(any((f.foreign or {}).get("source") == "commit" for f in r.findings))
+        for f in r.findings:
+            self.assertNotIn("mallory@evil.tld", f.what + (f.fix or ""))
 
     def test_uncredited_foreign_commit_still_flagged(self):
         # Discriminating: the co-author path must not blanket-allow everything.

@@ -363,6 +363,8 @@ def check(
         r.note(spec["description"])
 
     wanted = set(only or [])
+    matched: set[str] = set()
+    dry_ran = False
     verdicts = {}
     ledger = _load_ledger()
     spec_sha = hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()[:16]
@@ -372,6 +374,7 @@ def check(
         name = control.get("name") or "(unnamed)"
         if wanted and name not in wanted:
             continue
+        matched.add(name)
         declares = control.get("declares", "")
         probe = control.get("probe")
         expect = control.get("expect", "refused")
@@ -387,9 +390,24 @@ def check(
             verdicts[name] = UNTESTABLE
             continue
 
+        if expect not in ("refused", "allowed"):
+            # A typo used to fall through to the allowed branch, so
+            # expect:"alllowed" reported ENFORCED/CLEAN on a ledger hit.
+            r.add(
+                Finding(
+                    what=f"{name}: expect must be 'refused' or 'allowed'",
+                    detail=f"got {expect!r}",
+                    fix="fix the spec before running it",
+                    severity="invalid",
+                )
+            )
+            verdicts[name] = UNTESTABLE
+            continue
+
         if dry_run:
             r.note(f"WOULD RUN [{name}] expect={expect}: {' '.join(probe)}")
             verdicts[name] = "DRY-RUN"
+            dry_ran = True
             continue
 
         verdict = _sentinel_verdict(probe)
@@ -430,6 +448,20 @@ def check(
                     fix="raise the probe timeout, or fix the target so it answers",
                     severity="invalid",
                 )
+            )
+            verdicts[name] = UNTESTABLE
+            continue
+
+        if p.code in (126, 127):
+            # 127 = not found, 126 = not executable. Either satisfies a rule
+            # like exit_code_not_in:[0] while the target never ran at all.
+            r.add(
+                Finding(
+                    what=f"{name}: the probe never executed (exit {p.code})",
+                    detail="126=not executable, 127=not found - this is not a refusal",
+                    fix="fix the probe path before trusting any verdict from it",
+                    severity="invalid",
+                ).with_foreign("probe output", p.text())
             )
             verdicts[name] = UNTESTABLE
             continue
@@ -518,6 +550,26 @@ def check(
                     fix="apply the control, or stop declaring it",
                 )
             )
+
+    missing = sorted(wanted - matched)
+    if missing:
+        r.add(
+            Finding(
+                what=f"--only named control(s) that do not exist in this spec: {', '.join(missing)}",
+                fix="check the control names; a silently skipped control reads as passing",
+                severity="invalid",
+            )
+        )
+
+    if dry_ran:
+        # Nothing was evaluated. CLEAN would mean "we looked".
+        r.add(
+            Finding(
+                what="--dry-run evaluated nothing - this is not a verdict",
+                fix="re-run without --dry-run to get one",
+                severity="judgment",
+            )
+        )
 
     r.data["verdicts"] = verdicts
     silent = [k for k, v in verdicts.items() if v == UNENFORCED_SILENT]

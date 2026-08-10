@@ -90,12 +90,17 @@ class Finding:
     def with_foreign(self, source: str, text: str) -> "Finding":
         """Attach text produced by the target. Capped and tagged here, once."""
         raw = text or ""
-        capped = raw[:MAX_FOREIGN_BYTES]
+        # Cap BYTES, not code points. Slicing the str and reporting len(raw) as
+        # "bytes" meant 600 emoji were ~2400 UTF-8 bytes while the envelope
+        # claimed 600 and truncated:false. Decode with errors="ignore" so a cut
+        # through a multi-byte sequence cannot raise or emit a replacement char.
+        blob = raw.encode("utf-8")
+        capped = blob[:MAX_FOREIGN_BYTES].decode("utf-8", errors="ignore")
         self.foreign = {
             "source": source,
             "text": capped,
-            "bytes": len(raw),
-            "truncated": len(raw) > MAX_FOREIGN_BYTES,
+            "bytes": len(blob),
+            "truncated": len(blob) > MAX_FOREIGN_BYTES,
         }
         return self
 

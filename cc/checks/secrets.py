@@ -33,7 +33,7 @@ from ..run import run, have
 CHECK = "secrets"
 
 
-def _gitleaks_dir(path: str, r: Result) -> int:
+def _gitleaks_dir(path: str, r: Result, allow: list[str] | None = None) -> int:
     """Scan a directory tree. Returns number of findings added."""
     # mkstemp, not a guessable name in a shared TMPDIR. A predictable path is a
     # symlink target, and this tool writes a report about secrets into it -
@@ -53,11 +53,21 @@ def _gitleaks_dir(path: str, r: Result) -> int:
         r.add(Finding(what="gitleaks timed out", where=path, severity="invalid"))
         return 0
     n = 0
+    rows = None  # None = we never got a parseable report at all
     if os.path.isfile(out_json) and os.path.getsize(out_json) > 0:
         try:
             with open(out_json, "r", encoding="utf-8") as fh:
                 rows = json.load(fh) or []
             for row in rows:
+                # Suppress at the ROW, where we know it is a secret finding in
+                # a file the report is allowed to quote. The old design deleted
+                # findings AFTER the scan and rebuilt the code from scratch,
+                # which also erased timeouts and launch failures - a gitleaks
+                # timeout on an allowed file returned CLEAN. 💀
+                rf = row.get("File") or ""
+                if allow and os.path.realpath(os.path.join(path, rf) if not os.path.isabs(rf) else rf) in allow:
+                    r.note(f"allowed (submission target): {rf}")
+                    continue
                 n += 1
                 r.add(
                     Finding(
@@ -81,14 +91,31 @@ def _gitleaks_dir(path: str, r: Result) -> int:
             os.unlink(out_json)
         except OSError:
             pass
-    if not os.path.isfile(out_json) and p.code not in (0, 2):
+
+    # Exit-code semantics, decided AFTER we know whether a report was readable.
+    # 0 = clean, 2 = gitleaks found something. `rows is None` means we never
+    # parsed a report at all, so a bare exit 2 with no readable rows is gitleaks
+    # telling us it found secrets while we have nothing to show - reporting that
+    # as a clean scan is the exact false-CLEAN this suite exists to prevent. XX
+    # (An empty `rows` list, or rows fully suppressed by --allow, is a genuine
+    # clean answer and must NOT trip this.)
+    if p.code == 2 and rows is None:
         r.add(
             Finding(
-                what=f"gitleaks exited {p.code}",
+                what="gitleaks reported findings but emitted no usable redacted report",
                 where=path,
-                detail=p.text().strip()[:250],
+                fix="re-run gitleaks by hand; do not treat this as a clean scan",
                 severity="invalid",
-            )
+            ).with_foreign("gitleaks", p.text().strip()[-300:])
+        )
+    elif p.code not in (0, 2):
+        r.add(
+            Finding(
+                what=f"gitleaks exited {p.code} without completing a scan",
+                where=path,
+                fix="fix the invocation; an unrun scanner is not a clean scanner",
+                severity="invalid",
+            ).with_foreign("gitleaks", p.text().strip()[-300:])
         )
     return n
 
@@ -143,19 +170,28 @@ def check(paths: list[str], allow: list[str] | None = None, history: bool = Fals
     total = 0
     for p in paths:
         ap = os.path.abspath(p)
-        before = len(r.findings)
         if os.path.isdir(ap):
-            total += _gitleaks_dir(ap, r)
+            total += _gitleaks_dir(ap, r, allow)
             if history and os.path.isdir(os.path.join(ap, ".git")):
                 g = run(["gitleaks", "git", ap, "--no-banner", "--redact", "--exit-code", "2"], timeout=900)
-                if g.code == 2:
+                if g.timed_out or g.code not in (0, 2):
+                    # Only 0 and 2 are answers. Anything else means history was
+                    # NOT scanned, and silence there reads exactly like clean.
+                    r.add(
+                        Finding(
+                            what=f"gitleaks history scan did not complete (exit {g.code})",
+                            where=ap,
+                            fix="re-run: gitleaks git <path> --no-banner --redact",
+                            severity="invalid",
+                        ).with_foreign("gitleaks", g.text().strip()[-300:])
+                    )
+                elif g.code == 2:
                     r.add(
                         Finding(
                             what="secret found in git HISTORY (deleting the file does not remove it)",
                             where=ap,
-                            detail=g.text().strip()[-300:],
                             fix="rotate the credential; rewriting history is not enough once it is pushed",
-                        )
+                        ).with_foreign("gitleaks", g.text().strip()[-300:])
                     )
         else:
             # Scan the FILE, not its parent. `gitleaks dir` takes a single file
@@ -163,30 +199,9 @@ def check(paths: list[str], allow: list[str] | None = None, history: bool = Fals
             # of $HOME, attributed strangers' files to your run, and put their
             # paths into a JSON envelope headed for an agent transcript - while
             # `data.scanned` claimed only the one file. >:[
-            total += _gitleaks_dir(ap, r)
+            total += _gitleaks_dir(ap, r, allow)
 
-        # Drop findings that live in the nominated submission file - the report
-        # is allowed to quote its own finding.
-        if allow:
-            kept = []
-            for f in r.findings[before:]:
-                fp = os.path.realpath(f.where.rsplit(":", 1)[0]) if f.where else ""
-                if fp in allow:
-                    r.note(f"allowed (submission target): {f.where}")
-                else:
-                    kept.append(f)
-            r.findings = r.findings[:before] + kept
 
-    # Recompute the code after allow-list pruning so an allowed-only run is
-    # genuinely CLEAN. Rebuild through Result.add rather than re-deriving the
-    # mapping here - the private copy did not know about "judgment" and coded
-    # it as FINDING, which is exactly the drift a second implementation buys.
-    from ..result import EXIT_CLEAN
-    kept = list(r.findings)
-    r.findings = []
-    r.code = EXIT_CLEAN
-    for f in kept:
-        r.add(f)
     if not r.findings:
         r.note(f"gitleaks found nothing across {len(paths)} path(s)")
 

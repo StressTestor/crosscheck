@@ -140,14 +140,14 @@ def check(
         )
         return r
 
-    # A pair-programmed commit authored by a collaborator but crediting you via
-    # a Co-authored-by trailer is YOURS. Telling someone to cherry-pick "only
-    # your shas" would have them drop it.
-    strays = [
-        c for c in commits
-        if not G.same_person(c["email"], mine)
-        and not any(G.same_person(e, mine) for e in c.get("coauthors", []))
-    ]
+    # A Co-authored-by trailer is COMMIT-BODY TEXT. Anyone can write your email
+    # into their own commit and, under the previous rule, that commit stopped
+    # being reported as foreign. That is an attacker-controlled bypass of the
+    # only authorship signal this check has, and it was introduced here as a
+    # fix for a false positive - trading a nuisance for a hole. >:[
+    #
+    # Trailers are now EVIDENCE, surfaced on the finding, never a suppressor.
+    strays = [c for c in commits if not G.same_person(c["email"], mine)]
     r.data["foreign_commits"] = strays
 
     if len(commits) > max_commits:
@@ -160,17 +160,19 @@ def check(
         )
 
     for c in strays:
+        claims = [e for e in c.get("coauthors", []) if G.same_person(e, mine)]
+        detail = "claims you as Co-authored-by (unsigned commit-body text, NOT proof)" if claims else ""
         r.add(
             Finding(
                 what="commit on your branch is not authored by a known identity of yours",
                 where=c["sha"][:12],
-                detail=f"{c['author']} <{c['email']}>: {c['subject'][:110]}",
+                detail=detail,
                 fix=(
-                    f"if that address IS yours, register it: "
-                    f"CROSSCHECK_IDENTITIES={c['email']} - otherwise it is replayed: "
-                    f"git checkout -B {branch} {base_ref} && git cherry-pick <only your shas>"
+                    "if that address IS yours, register it in CROSSCHECK_IDENTITIES - "
+                    f"otherwise it is replayed: git checkout -B {branch} {base_ref} "
+                    "&& git cherry-pick <only your shas>"
                 ),
-            )
+            ).with_foreign("commit", f"{c['author']} <{c['email']}>: {c['subject']}")
         )
 
     if not strays and len(commits) <= max_commits:

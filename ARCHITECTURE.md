@@ -55,7 +55,7 @@ crosscheck/
                           #   given KIND of work belongs on
   specs/                  # hand-written enforce specs + fixtures (see its README)
                           #   .redruns.json = proof each control has been seen to FAIL
-  tests/                  # unittest; 139 tests, incl. suite-wide detector + provenance invariants
+  tests/                  # unittest; 151 tests, incl. suite-wide detector + provenance invariants
   install.sh              # ~/.local/bin/cc launcher + optional pre-push hook
 ```
 
@@ -219,10 +219,36 @@ regression runner (ghost blocks its own tester from inside an agent).
 
 ## last updated
 
-2026-08-09 — 7 checks, 139 tests, skill + adjudicate workflow, own CI.
+2026-08-10 — 7 checks, 151 tests, skill + adjudicate workflow, own CI.
+An external xhigh review (gpt-5.6-sol, `docs/codex-review-2026-08-10.md`) found
+17 defects the in-house gates missed; the verdict-corrupting subset is fixed and
+regression-tested in `tests/test_verdict_integrity.py`. Open items from it are
+listed below.
 `enforce` added after the codecalc audit showed declared-vs-applied recurring across targets.
 Four adversarial review rounds + marko applied (32 defects fixed, incl. 10 false-CLEAN
 paths, a false-INELIGIBLE in `vrp`, and one unrecoverable data-loss path in `baseline`).
+
+**OPEN, from the external review** (not yet fixed — do not read the suite as
+covering these):
+- `scope` has **zero** usable policy: its only real dataset stores repo paths
+  (`github.com/google`) while the matcher compares DNS hosts, so every Google
+  OSS URL normalises to `github.com` and reports OUT. Deletion recommended.
+- foreign text still reaches trusted `what`/`detail`/`fix`/`where`/`notes`/`data`
+  in `ci`, `secrets`, `baseline` and `pr-branch`. The emission invariant is
+  real for the `foreign` field but is NOT enforced at every producer, and the
+  suite-wide test for it only exercises `with_foreign()` itself.
+- `ci` runs zizmor/actionlint with the AUDITED repo's own config and ignore
+  rules in force. A *valid* ignore-everything config can still suppress
+  analysis; only malformed config is currently caught.
+- `ci`'s regex pin/permission findings cannot be cancelled by the YAML-aware
+  scanners, because FINDING outranks. "The real linter runs alongside" is not
+  mitigation when it cannot override.
+- `enforce` `expect:"allowed"` is implemented as merely *not refused*, so a
+  crashed allowed-case can read as successfully allowed.
+- `baseline` lets gitignored build/cache state survive the stash, so
+  dirty-generated artifacts can make an introduced failure look pre-existing.
+- the `google-oss-vrp` floor emits a hard FINDING off unverified provenance; it
+  should be JUDGMENT until primary-source verified.
 
 **Known, accepted limits** (documented rather than papered over):
 - **`cc enforce` executes probes in a blind spot the local PreToolUse guard

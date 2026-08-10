@@ -116,6 +116,20 @@ def _floor_verdict(pol: dict, vuln_class: str, tier: str | None, r: Result) -> N
         )
         return
 
+    known_tiers = {t.strip().lower() for t in (floor.get("tiers") or {})}
+    if known_tiers and tier.strip().lower() not in known_tiers:
+        # "not on the unrewarded list" is only meaningful for a tier that
+        # exists. A typo used to be rewarded by absence: OT22 -> CLEAN.
+        r.add(
+            Finding(
+                what=f"unknown tier {tier!r} for {pol.get('program', 'this program')}",
+                detail=f"tiers on record: {', '.join(sorted(floor.get('tiers') or {}))}",
+                fix="pass a tier the policy actually declares",
+                severity="invalid",
+            )
+        )
+        return
+
     r.data["tier"] = tier
     for row in floor.get("unrewarded", []) or []:
         if str(row.get("tier", "")).strip().lower() != tier.strip().lower():
