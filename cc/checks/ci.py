@@ -130,6 +130,7 @@ def check(
     changed: list[str] | None = None,
     require_sast: bool = False,
     audit: bool = True,
+    strict_suppressions: bool = False,
 ) -> Result:
     r = Result(check=CHECK)
 
@@ -153,7 +154,14 @@ def check(
     # ---- delegate the semantics ------------------------------------------
     sast_ran = []
     if wfs and have("actionlint"):
-        p = run(["actionlint", "-no-color", "-oneline"], cwd=repo, timeout=180)
+        # Neutral config for the same reason: `-config-file /dev/null` stops
+        # the audited repo's .github/actionlint.yaml from choosing what this
+        # gate is allowed to see.
+        p = run(
+            ["actionlint", "-no-color", "-oneline", "-config-file", os.devnull],
+            cwd=repo,
+            timeout=180,
+        )
         # A scanner counts as having RUN only if it actually analyzed the
         # workflows. Crediting a timeout - or a config error - suppressed both
         # --require-sast and the no-SAST fallback, and the audited repo owns
@@ -195,37 +203,59 @@ def check(
             )
 
     if wfs and have("zizmor"):
-        p = run(
-            # --no-exit-codes: without it zizmor encodes the HIGHEST FINDING
-            # SEVERITY in its exit status (13 low, 14 medium/high, ...), so a
-            # gate written as `code in (0, 14)` silently discards every
-            # low-severity finding. With it, 0 means "the audit ran" and
-            # non-zero means "fatal: no audit was performed" - which is the
-            # only distinction this gate actually needs. XX
-            ["zizmor", "--offline", "--min-severity=low", "--format=plain",
-             "--no-exit-codes", ".github/workflows/"],
-            cwd=repo,
-            timeout=300,
-        )
-        # With --no-exit-codes: 0 = the audit ran, non-zero = it did not (a
-        # malformed .github/zizmor.yml, which the AUDITED repo controls, is the
-        # case that matters). Never credit a scanner that analyzed nothing.
-        if p.timed_out:
+        # Run TWICE, on purpose.
+        #
+        # The audited repo owns .github/zizmor.yml and inline `# zizmor: ignore`
+        # comments, so honouring them lets the thing being audited disable its
+        # own audit - a valid ignore-everything config made a
+        # pull_request_target + template-injection workflow report CLEAN.
+        # But blanket --no-ignores is just as wrong the other way: odysseus
+        # suppresses one dangerous-triggers rule with a written justification
+        # in the file, and re-reporting that on every run is how a tool earns
+        # a mute.
+        #
+        # So: findings that survive the repo's OWN config are real findings.
+        # Findings that appear only with suppressions disabled are ACCEPTED
+        # RISK - reported as judgment, naming that the repo suppressed them,
+        # never silently honoured and never silently escalated. (¬‿¬)
+        base = ["zizmor", "--offline", "--min-severity=low", "--format=plain",
+                "--no-exit-codes", ".github/workflows/"]
+        p_honoured = run(base, cwd=repo, timeout=300)
+        p_neutral = run(base[:-1] + ["--no-config", "--no-ignores", base[-1]],
+                        cwd=repo, timeout=300)
+
+        def _zfindings(proc):
+            return [
+                ln.strip() for ln in proc.text().splitlines()
+                if re.match(r"^(error|warning|note)\[", ln.strip())
+            ]
+
+        if p_neutral.timed_out or p_honoured.timed_out:
             r.note("zizmor timed out - NOT counted as a scanner that ran")
-        elif p.code == 0:
+        elif p_neutral.code == 0:
             sast_ran.append("zizmor")
-            # Parse in the RAN branch. This loop briefly lived under `else`,
-            # which meant findings were read only when zizmor FAILED and
-            # silently dropped on exit 14 - the exact false-CLEAN this module
-            # exists to prevent, reintroduced during a refactor. XX
-            for ln in p.text().splitlines():
-                s = ln.strip()
-                if re.match(r"^(error|warning|note)\[", s):
+            honoured = set(_zfindings(p_honoured)) if p_honoured.code == 0 else set()
+            for ln in _zfindings(p_neutral):
+                if ln in honoured or p_honoured.code != 0:
                     r.add(
-                        Finding(what="zizmor reported a workflow issue").with_foreign("zizmor", s)
+                        Finding(what="zizmor reported a workflow issue").with_foreign("zizmor", ln)
+                    )
+                else:
+                    # Judgment on YOUR repo (a justified suppression is a
+                    # decision, not a bug). Finding when auditing SOMEONE
+                    # ELSE'S - there the suppression is the thing you came to
+                    # look at, and taking their word for it is the whole trap.
+                    r.add(
+                        Finding(
+                            what="zizmor finding SUPPRESSED by this repo's own config",
+                            detail="accepted risk, not a clean result - check the justification holds",
+                            fix="read the ignore rule and its stated reason before relying on it",
+                            severity="finding" if strict_suppressions else "judgment",
+                        ).with_foreign("zizmor", ln)
                     )
         else:
-            r.note(f"zizmor exited {p.code} WITHOUT scanning: " + (p.text().strip()[-200:] or "(no output)"))
+            r.note(f"zizmor exited {p_neutral.code} WITHOUT scanning: "
+                   + (p_neutral.text().strip()[-200:] or "(no output)"))
     r.data["sast"] = sast_ran
 
     if require_sast and not sast_ran:

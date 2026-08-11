@@ -90,6 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--changed", default="", help="comma-separated changed files, to trigger routing")
     c.add_argument("--require-sast", action="store_true", help="INVALID if no Actions SAST is installed")
     c.add_argument("--no-audit", action="store_true")
+    c.add_argument("--strict-suppressions", action="store_true", help="treat findings the repo suppressed as FINDINGs (use when auditing someone else's repo)")
 
     s = _sub("scope", help="is this host inside the program's declared scope (suffix-anchored)")
     s.add_argument("program")
@@ -138,7 +139,7 @@ def dispatch(a) -> list[Result]:
         return [prbranch.check(_p(a.repo), a.branch, a.remote, a.base, a.max_commits)]
     if a.cmd == "ci":
         changed = [x.strip() for x in a.changed.split(",") if x.strip()]
-        return [ci.check(_p(a.repo), changed, a.require_sast, not a.no_audit)]
+        return [ci.check(_p(a.repo), changed, a.require_sast, not a.no_audit, a.strict_suppressions)]
     if a.cmd == "scope":
         return [scope.check(a.program, a.hosts)]
     if a.cmd == "secrets":

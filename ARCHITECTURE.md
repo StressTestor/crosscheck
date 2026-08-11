@@ -55,7 +55,7 @@ crosscheck/
                           #   given KIND of work belongs on
   specs/                  # hand-written enforce specs + fixtures (see its README)
                           #   .redruns.json = proof each control has been seen to FAIL
-  tests/                  # unittest; 151 tests, incl. suite-wide detector + provenance invariants
+  tests/                  # unittest; 152 tests, incl. suite-wide detector + provenance invariants
   install.sh              # ~/.local/bin/cc launcher + optional pre-push hook
 ```
 
@@ -219,7 +219,7 @@ regression runner (ghost blocks its own tester from inside an agent).
 
 ## last updated
 
-2026-08-10 — 7 checks, 151 tests, skill + adjudicate workflow, own CI.
+2026-08-11 — 7 checks, 152 tests, skill + adjudicate workflow, own CI.
 An external xhigh review (gpt-5.6-sol, `docs/codex-review-2026-08-10.md`) found
 17 defects the in-house gates missed; the verdict-corrupting subset is fixed and
 regression-tested in `tests/test_verdict_integrity.py`. Open items from it are
@@ -237,9 +237,15 @@ covering these):
   in `ci`, `secrets`, `baseline` and `pr-branch`. The emission invariant is
   real for the `foreign` field but is NOT enforced at every producer, and the
   suite-wide test for it only exercises `with_foreign()` itself.
-- `ci` runs zizmor/actionlint with the AUDITED repo's own config and ignore
-  rules in force. A *valid* ignore-everything config can still suppress
-  analysis; only malformed config is currently caught.
+- ~~`ci` honours the audited repo's ignore rules~~ — **FIXED.** `ci` now runs
+  zizmor twice: once honouring the repo's config, once with `--no-config
+  --no-ignores`. A finding that survives the repo's own config is a FINDING; a
+  finding that appears only with suppressions disabled is **accepted risk**,
+  reported as JUDGMENT naming that the repo suppressed it. `--strict-suppressions`
+  escalates those to FINDING for auditing someone else's repo. actionlint runs
+  with `-config-file /dev/null` for the same reason. Verified: a
+  `pull_request_target` + template-injection workflow with a valid
+  ignore-everything `zizmor.yml` used to report CLEAN.
 - `ci`'s regex pin/permission findings cannot be cancelled by the YAML-aware
   scanners, because FINDING outranks. "The real linter runs alongside" is not
   mitigation when it cannot override.

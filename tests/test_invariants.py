@@ -25,7 +25,7 @@ import tempfile
 import unittest
 
 from cc.checks import ci, baseline, scope, vrp, enforce
-from cc.result import Result, Finding, EXIT_CLEAN
+from cc.result import Result, Finding, EXIT_CLEAN, EXIT_FINDING
 from cc.run import have
 
 # A token no legitimate crosscheck sentence would ever contain.
@@ -91,6 +91,37 @@ class TestDetectorsStillDetect(unittest.TestCase):
             any((f.foreign or {}).get("source") == "zizmor" for f in r.findings),
             f"low-severity zizmor findings were dropped: notes={r.notes}",
         )
+
+    def test_audited_repo_cannot_suppress_its_own_audit(self):
+        # The audited repo owns .github/zizmor.yml and .github/actionlint.yaml.
+        # A VALID ignore-everything config used to suppress the analysis, and
+        # ci then printed "clean under ... zizmor" - vouching for a
+        # pull_request_target + template-injection workflow. Malformed config
+        # was already caught; this is the same hole through the supported path.
+        if not have("zizmor"):
+            self.skipTest("zizmor not installed")
+        d = _repo_with(
+            "name: x\non: pull_request_target\npermissions: {}\njobs:\n  a:\n"
+            "    runs-on: ubuntu-latest\n    steps:\n"
+            '      - run: echo "${{ github.event.pull_request.title }}"\n',
+            name="danger.yml",
+        )
+        with open(os.path.join(d, ".github", "zizmor.yml"), "w") as fh:
+            fh.write(
+                "rules:\n  template-injection:\n    ignore:\n      - danger.yml\n"
+                "  dangerous-triggers:\n    ignore:\n      - danger.yml\n"
+            )
+        r = ci.check(d, require_sast=True, audit=False)
+        self.assertNotEqual(r.code, EXIT_CLEAN, r.notes)
+        self.assertTrue(
+            any((f.foreign or {}).get("source") == "zizmor" for f in r.findings),
+            f"the repo's own ignore config suppressed the gate: notes={r.notes}",
+        )
+        # A suppression is an accepted risk on your own repo...
+        self.assertTrue(any("SUPPRESSED by this repo" in f.what for f in r.findings))
+        # ...and a FINDING when you are auditing someone else's.
+        strict = ci.check(d, require_sast=True, audit=False, strict_suppressions=True)
+        self.assertEqual(strict.code, EXIT_FINDING)
 
     def test_scope_finds_the_substring_trap(self):
         d = tempfile.mkdtemp()
