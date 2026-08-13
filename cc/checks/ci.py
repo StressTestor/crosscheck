@@ -95,6 +95,9 @@ def _scan_pins(path: str, repo: str, r: Result, as_note: bool = False) -> None:
         ref = m.group(1)
         if ref.startswith(("./", "../", "docker://")):
             continue  # local or docker action, no SHA to pin
+        # The `uses:` value is workflow-controlled text. It used to sit in
+        # trusted `detail` and even got interpolated into `fix` - a crafted
+        # ref was handed back as crosscheck's own remediation advice. XX
         if "@" not in ref:
             if as_note:
                 r.note(f"pin grep (zizmor is authoritative): {rel}:{i} uses an action with no ref")
@@ -103,9 +106,8 @@ def _scan_pins(path: str, repo: str, r: Result, as_note: bool = False) -> None:
                 Finding(
                     what="action used with no ref at all",
                     where=f"{rel}:{i}",
-                    detail=ref,
                     fix="pin to a full 40-char commit SHA",
-                )
+                ).with_foreign("workflow uses:", ref)
             )
             continue
         _name, _, pin = ref.rpartition("@")
@@ -117,9 +119,8 @@ def _scan_pins(path: str, repo: str, r: Result, as_note: bool = False) -> None:
                 Finding(
                     what="third-party action pinned to a mutable tag, not a commit SHA",
                     where=f"{rel}:{i}",
-                    detail=ref,
-                    fix=f"pin to the 40-hex SHA: {_name}@<sha>  # {pin}",
-                )
+                    fix="replace the tag with the 40-hex commit SHA it currently resolves to",
+                ).with_foreign("workflow uses:", ref)
             )
 
 
@@ -199,20 +200,25 @@ def check(
         elif al_findings or (p.code == 0 and not al_self):
             sast_ran.append("actionlint")
             for ln in al_findings:
+                # `where` used to carry the file:line:col actionlint printed -
+                # scanner output in a trusted field. The location still
+                # arrives, quoted inside foreign with the rest of the line. XX
                 r.add(
                     Finding(
                         what="actionlint reported a workflow issue",
-                        where=_ACTIONLINT_RE.match(ln).group(1),
                     ).with_foreign("actionlint", ln)
                 )
         else:
             # Not credited, and said ONCE. sast_ran staying empty is what
             # carries the verdict into the judgment Finding / --require-sast
             # gate below, so a junk config cannot buy a clean result - while a
-            # plain non-git directory does not become a hard error.
-            r.note(
-                f"actionlint exited {p.code} WITHOUT linting: "
-                + ((al_self[0] if al_self else p.text().strip()[-200:]) or "(no output)")
+            # plain non-git directory does not become a hard error. The
+            # scanner's own words go through the foreign channel, not into a
+            # trusted note.
+            r.note(f"actionlint exited {p.code} WITHOUT linting - not credited; its output follows")
+            r.note_foreign(
+                "actionlint",
+                (al_self[0] if al_self else p.text().strip()[-200:]) or "(no output)",
             )
 
     if wfs and have("zizmor"):
@@ -267,8 +273,11 @@ def check(
                         ).with_foreign("zizmor", ln)
                     )
         else:
-            r.note(f"zizmor exited {p_neutral.code} WITHOUT scanning: "
-                   + (p_neutral.text().strip()[-200:] or "(no output)"))
+            # crosscheck-self.json pins the "zizmor exited N WITHOUT scanning"
+            # prefix; keep it stable. The scanner's own words follow through
+            # the foreign channel.
+            r.note(f"zizmor exited {p_neutral.code} WITHOUT scanning - not credited; its output follows")
+            r.note_foreign("zizmor", p_neutral.text().strip()[-200:] or "(no output)")
     r.data["sast"] = sast_ran
 
     # ---- the greps: degraded detector, not a second authority -------------

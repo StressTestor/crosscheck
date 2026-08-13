@@ -144,16 +144,25 @@ the output.
 `cc enforce` is the one subcommand that executes the target, and its probes run
 as subprocesses from inside python — **not** as agent Bash calls. The local
 sentinel/ghost PreToolUse hook only inspects the agent's command line, so it
-never sees a probe's argv.
+never sees a probe's argv on its own.
 
 Verified, not assumed: `_guard-canary.json` fires an attack-shaped probe
 (attempts to read `/etc/shadow`, exits 7 with a marker). It reaches the target
-and runs, in sessions where that same guard blocks the agent for far less.
+and runs, in sessions where that same guard blocks the agent for far less. It
+stays as the standing regression for that blind spot.
 
-Good news for enforce — it will not report UNTESTABLE forever the way a
-guard-tested module would. But read the other direction too: **a spec is
-execution the guard will not review.** Hand-writing them is the point, not a
-formality. `--dry-run` before every change to a spec, every time.
+So enforce hands the guard each probe's argv itself, on the way past, and a
+DENY **fails closed**: the probe does not fire and the control reports
+INVALID. `--override-sentinel` runs it anyway — the override is stamped into
+the audit log, where it can be answered for. That keeps discrimination (no
+UNTESTABLE-forever) without letting a probe fire past a refusal silently.
+
+Read the other direction too: **a spec is execution the guard only gets an
+advisory look at.** Hand-writing them is the point, not a formality — which is
+also why `cc enforce` refuses filesystem paths and loads bare names from the
+spec dir only: a spec is arbitrary argv, and it goes through this directory
+and its review or it does not run. `--dry-run` before every change to a spec,
+every time.
 
 ## running
 
@@ -161,6 +170,8 @@ formality. `--dry-run` before every change to a spec, every time.
 cc enforce <name> --dry-run          # print the probes, execute nothing
 cc enforce <name>                    # fire them
 cc enforce <name> --only nproc       # one control
+cc enforce <name> --override-sentinel  # fire even where the guard says DENY (recorded)
 ```
 
 `--dry-run` first, every time you touch a spec. It prints the exact argv.
+Names only — `cc enforce /tmp/spec.json` is refused by design.

@@ -118,11 +118,12 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--paths", nargs="*", default=[])
 
     e = _sub("enforce", help="RUNS a local target: does a declared control actually engage, and does the target admit it when it does not")
-    e.add_argument("spec", help="spec name in specs/, or a path to a spec json")
+    e.add_argument("spec", help="spec name in specs/ (paths are refused - a spec is arbitrary argv)")
     e.add_argument("--only", action="append", default=[], help="run only these control names")
     e.add_argument("--dry-run", action="store_true", help="print the probes without executing them")
     e.add_argument("--timeout", type=int, default=120)
     e.add_argument("--record-red", action="store_true", help="record controls that FAIL here as proven-discriminating (run against a deliberately broken target)")
+    e.add_argument("--override-sentinel", action="store_true", help="fire probes the local guard would DENY (fails closed by default; the override is recorded in the audit log)")
 
     d = _sub("decay", help="which checks have not fired - delete them")
     d.add_argument("--days", type=int, default=60)
@@ -147,7 +148,8 @@ def dispatch(a) -> list[Result]:
     if a.cmd == "vrp":
         return [vrp.check(a.program, a.vuln_class, a.max_age_days, tier=a.tier)]
     if a.cmd == "enforce":
-        return [enforce.check(a.spec, a.only, a.dry_run, a.timeout, a.record_red)]
+        return [enforce.check(a.spec, a.only, a.dry_run, a.timeout, a.record_red,
+                              override_sentinel=a.override_sentinel)]
     if a.cmd == "run":
         return run_profile(a)
     raise ValueError(a.cmd)

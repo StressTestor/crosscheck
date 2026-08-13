@@ -148,7 +148,19 @@ def check(
     #
     # Trailers are now EVIDENCE, surfaced on the finding, never a suppressor.
     strays = [c for c in commits if not G.same_person(c["email"], mine)]
-    r.data["foreign_commits"] = strays
+    # `data` travels into JSON envelopes headed for agent transcripts. Raw
+    # commit objects put uncapped attacker-authored text there; what a caller
+    # needs is WHICH commits are foreign, so ship the sha plus capped header
+    # fields, never whole bodies. XX
+    r.data["foreign_commits"] = [
+        {
+            "sha": c["sha"],
+            "author": (c.get("author") or "")[:120],
+            "email": (c.get("email") or "")[:120],
+            "subject": (c.get("subject") or "")[:200],
+        }
+        for c in strays[:50]
+    ]
 
     if len(commits) > max_commits:
         r.add(

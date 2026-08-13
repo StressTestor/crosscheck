@@ -41,6 +41,18 @@ EXIT_JUDGMENT = 4
 # enough that a wall of crafted text cannot bury the verdict around it.
 MAX_FOREIGN_BYTES = 600
 
+
+def _cap_foreign(text: str) -> tuple[str, int, bool]:
+    """(capped text, total bytes, truncated). One capping rule for every
+    foreign channel, so `foreign` and `note_foreign` cannot drift apart.
+
+    Cap BYTES, not code points, and decode with errors='ignore' so a cut
+    through a multi-byte sequence cannot raise or emit a replacement char.
+    """
+    blob = (text or "").encode("utf-8")
+    capped = blob[:MAX_FOREIGN_BYTES].decode("utf-8", errors="ignore")
+    return capped, len(blob), len(blob) > MAX_FOREIGN_BYTES
+
 # Loudness order for worst-of aggregation. Higher wins. (¬‿¬) INVALID on top.
 _RANK = {EXIT_CLEAN: 0, EXIT_JUDGMENT: 1, EXIT_FINDING: 2, EXIT_INVALID: 3}
 
@@ -89,18 +101,12 @@ class Finding:
 
     def with_foreign(self, source: str, text: str) -> "Finding":
         """Attach text produced by the target. Capped and tagged here, once."""
-        raw = text or ""
-        # Cap BYTES, not code points. Slicing the str and reporting len(raw) as
-        # "bytes" meant 600 emoji were ~2400 UTF-8 bytes while the envelope
-        # claimed 600 and truncated:false. Decode with errors="ignore" so a cut
-        # through a multi-byte sequence cannot raise or emit a replacement char.
-        blob = raw.encode("utf-8")
-        capped = blob[:MAX_FOREIGN_BYTES].decode("utf-8", errors="ignore")
+        capped, nbytes, truncated = _cap_foreign(text)
         self.foreign = {
             "source": source,
             "text": capped,
-            "bytes": len(blob),
-            "truncated": len(blob) > MAX_FOREIGN_BYTES,
+            "bytes": nbytes,
+            "truncated": truncated,
         }
         return self
 
@@ -166,6 +172,22 @@ class Result:
 
     def note(self, msg: str) -> "Result":
         self.notes.append(msg)
+        return self
+
+    def note_foreign(self, source: str, text: str) -> "Result":
+        """A note whose body came out of the thing under test.
+
+        Notes are trusted crosscheck voice, and note-shaped foreign text (a
+        pre-existing test id, a scanner's self-diagnostic) used to be
+        f-stringed straight into them. Same treatment as Finding.foreign:
+        capped once, tagged with its source, and flattened to one `|`-quoted
+        line so a crafted payload cannot walk out of the note and impersonate
+        a verdict line in human output.
+        """
+        capped, nbytes, truncated = _cap_foreign(text)
+        tail = " [truncated]" if truncated else ""
+        body = " | ".join(capped.splitlines()) or "(empty)"
+        self.notes.append(f"untrusted from {source} ({nbytes} bytes{tail}): | {body}")
         return self
 
     @property

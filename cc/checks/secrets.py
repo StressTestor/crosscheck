@@ -66,17 +66,26 @@ def _gitleaks_dir(path: str, r: Result, allow: list[str] | None = None) -> int:
                 # timeout on an allowed file returned CLEAN. 💀
                 rf = row.get("File") or ""
                 if allow and os.path.realpath(os.path.join(path, rf) if not os.path.isabs(rf) else rf) in allow:
-                    r.note(f"allowed (submission target): {rf}")
+                    # The path came out of the scanner's report, so it is
+                    # foreign text even when it names the file we allowed.
+                    r.note("one finding suppressed - it is in the nominated submission target:")
+                    r.note_foreign("gitleaks", rf)
                     continue
                 n += 1
+                # `where` used to carry File:StartLine straight from the
+                # report - scanner-reported paths are foreign text, and a
+                # crafted filename sat in a trusted field. `where` is now the
+                # root WE were asked to scan; the location travels in foreign
+                # with the rest of the report row. XX
                 r.add(
                     Finding(
                         what="possible secret",
-                        where=f"{row.get('File', '?')}:{row.get('StartLine', '?')}",
+                        where=path,
                         fix="remove it, rotate it, and keep it out of anything the vault hook pushes",
                     ).with_foreign(
                         "gitleaks",
-                        f"{row.get('RuleID', 'unknown rule')}: {(row.get('Match') or '')}",
+                        f"{row.get('RuleID', 'unknown rule')} at "
+                        f"{row.get('File', '?')}:{row.get('StartLine', '?')}: {(row.get('Match') or '')}",
                     )
                 )
         except (OSError, ValueError) as e:

@@ -79,9 +79,12 @@ class TestSecretsNeverLaunders(unittest.TestCase):
         with patch.object(secrets, "have", lambda t: True), patch.object(secrets, "run", fake):
             r = secrets.check([self.d], allow=["report.md"])
         self.assertEqual(r.code, EXIT_FINDING)
-        wheres = " ".join(f.where for f in r.findings)
-        self.assertIn("other.txt", wheres)
-        self.assertNotIn("report.md", wheres)
+        # Scanner-reported paths are foreign text now, so the sibling row's
+        # location arrives through the foreign channel, not `where`.
+        foreigns = " ".join((f.foreign or {}).get("text", "") for f in r.findings)
+        self.assertIn("other.txt", foreigns)
+        self.assertNotIn("report.md", foreigns)
+        self.assertEqual(len([f for f in r.findings if f.what == "possible secret"]), 1)
 
 
 class TestEnforceNeverBlessesANonRun(unittest.TestCase):

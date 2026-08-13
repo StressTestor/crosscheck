@@ -10,9 +10,11 @@ import json
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from cc.checks import enforce
 from cc.result import EXIT_CLEAN, EXIT_FINDING, EXIT_INVALID, EXIT_JUDGMENT
+from cc.run import Proc
 
 # A target that refuses the probe and reports honestly.
 TARGET_ENFORCED = """#!/bin/sh
@@ -339,6 +341,68 @@ class TestEnforce(unittest.TestCase):
     def test_spec_name_traversal_is_refused(self):
         r = enforce.check(".." + os.sep + "somewhere")
         self.assertEqual(r.code, EXIT_INVALID)
+
+    def test_explicit_spec_paths_are_refused(self):
+        # A spec is arbitrary argv. load_spec used to accept any filesystem
+        # path, so any json anywhere on disk could become an execution plan,
+        # sidestepping the review that specs/ diffs get.
+        outside = os.path.join(self.d, "outside.json")
+        with open(outside, "w") as fh:
+            json.dump({"target": "x", "cwd": self.d,
+                       "controls": [self._nproc_control("/bin/true")]}, fh)
+        r = enforce.check(outside)
+        self.assertEqual(r.code, EXIT_INVALID)
+        self.assertTrue(any("paths are refused" in f.what for f in r.findings),
+                        [f.what for f in r.findings])
+
+    def test_bare_name_with_json_suffix_still_loads(self):
+        # `cc enforce foo.json` is a habit, not an attack. It resolves to the
+        # same specs/foo.json a bare name would.
+        t = self._target(TARGET_ENFORCED)
+        r = enforce.check(self._spec(self._nproc_control(t)) + ".json")
+        self.assertIn("nproc", r.data["verdicts"])
+
+    def _deny_run(self):
+        real_run = enforce.run
+
+        def fake(argv, **k):
+            if argv and argv[0] == "sentinel":
+                return Proc(argv=argv, code=2, out="", err="deny", timed_out=False)
+            return real_run(argv, **k)
+
+        return fake
+
+    def test_sentinel_deny_fails_closed_without_the_override(self):
+        # A probe firing PAST a guard refusal, silently, was the accepted
+        # limit here. Now it is INVALID and the probe does not fire.
+        marker = os.path.join(self.d, "fired")
+        t = self._target(f"#!/bin/sh\ntouch {marker}\nexit 1\n")
+        c = self._nproc_control(t)
+        with patch.object(enforce, "have", lambda tool: tool == "sentinel"), \
+             patch.object(enforce, "run", self._deny_run()):
+            r = enforce.check(self._spec(c))
+        self.assertEqual(r.code, EXIT_INVALID, [f.what for f in r.findings])
+        self.assertEqual(r.data["verdicts"]["nproc"], enforce.UNTESTABLE)
+        self.assertFalse(os.path.exists(marker), "the probe fired past a guard DENY")
+
+    def test_override_sentinel_fires_and_stamps_the_audit_log(self):
+        # Discrimination preserved: the override runs the probe, and the
+        # audit row says a DENY was overridden - it can be answered for.
+        log = os.path.join(tempfile.mkdtemp(), "probe-audit.jsonl")
+        os.environ[enforce.AUDIT_LOG_ENV] = log
+        try:
+            t = self._target(TARGET_ENFORCED)
+            c = self._nproc_control(t)
+            c["self_report"] = {}
+            with patch.object(enforce, "have", lambda tool: tool == "sentinel"), \
+                 patch.object(enforce, "run", self._deny_run()):
+                r = enforce.check(self._spec(c), override_sentinel=True)
+            self.assertEqual(r.data["verdicts"]["nproc"], enforce.ENFORCED)
+            rows = [json.loads(ln) for ln in open(log, encoding="utf-8") if ln.strip()]
+            self.assertTrue(rows, "the overridden probe fired without an audit row")
+            self.assertIs(rows[-1].get("sentinel_overridden"), True)
+        finally:
+            os.environ.pop(enforce.AUDIT_LOG_ENV, None)
 
     def test_spec_with_no_controls_is_invalid(self):
         p = os.path.join(self.specs, "empty.json")
