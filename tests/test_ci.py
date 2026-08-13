@@ -4,12 +4,19 @@
 deletion commit for why and for the sandbox design that went with it.)
 """
 
+import json
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from cc.checks import ci
 from cc.result import EXIT_CLEAN, EXIT_FINDING, EXIT_INVALID, EXIT_JUDGMENT
+from cc.run import Proc
+
+
+def _proc(code=0, out="", err="", timed_out=False):
+    return Proc(argv=["fake"], code=code, out=out, err=err, timed_out=timed_out)
 
 UNPINNED = """
 name: x
@@ -60,11 +67,23 @@ class TestCi(unittest.TestCase):
     def test_no_workflows_still_audits_dependencies(self):
         # A repo with no CI can still ship a vulnerable requirements.txt. The
         # old early-return made that indistinguishable from an empty dir.
+        # The old version of this test passed audit=False, so it would have
+        # survived the whole dependency block being deleted. Now the mocked
+        # scan must actually be invoked or the assertion fails.
         d = tempfile.mkdtemp()
         with open(os.path.join(d, "requirements.txt"), "w") as fh:
             fh.write("requests==2.19.0\n")
-        r = ci.check(d, audit=False)
-        self.assertFalse(any("nothing to audit" in n for n in r.notes), r.notes)
+        calls = []
+
+        def fake_run(argv, **k):
+            calls.append(argv[0])
+            return _proc(code=0, out=json.dumps({"dependencies": []}))
+
+        with patch.object(ci, "have", lambda t: t == "pip-audit"), \
+             patch.object(ci, "run", fake_run):
+            r = ci.check(d)
+        self.assertIn("pip-audit", calls, "no workflows and the dependency audit never ran")
+        self.assertEqual(r.code, EXIT_CLEAN, [f.what for f in r.findings])
 
     def test_uppercase_sha_pin_is_not_a_finding(self):
         d = self._repo(PINNED.replace("9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
@@ -179,6 +198,77 @@ class TestCi(unittest.TestCase):
             fh.write("runs:\n  steps:\n    - uses: some/action@v1\n")
         r = ci.check(d, audit=False)
         self.assertTrue(any("action.yml" in f.where for f in r.findings), [f.where for f in r.findings])
+
+
+class TestDependencyAuditNeverFakesAScan(unittest.TestCase):
+    """A failed or empty dependency scan is INVALID, never zero findings.
+
+    Empty scanner stdout used to become `{}`, which "parsed", and once it
+    parsed the nonzero exit was ignored for both pip-audit and npm - a failed
+    scan returned code 0 with no findings. Mocked `Proc` on purpose: coverage
+    of a false-CLEAN must not depend on which scanners this machine has.
+    """
+
+    def _pyrepo(self):
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "requirements.txt"), "w") as fh:
+            fh.write("requests==2.19.0\n")
+        return d
+
+    def _npmrepo(self):
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "package-lock.json"), "w") as fh:
+            fh.write("{}")
+        return d
+
+    def _check(self, repo, tool, proc):
+        with patch.object(ci, "have", lambda t: t == tool), \
+             patch.object(ci, "run", lambda *a, **k: proc):
+            return ci.check(repo)
+
+    def test_failed_pip_audit_is_invalid_not_clean(self):
+        r = self._check(self._pyrepo(), "pip-audit", _proc(code=1, err="boom"))
+        self.assertEqual(r.code, EXIT_INVALID, [f.what for f in r.findings])
+        self.assertTrue(any("no usable report" in f.what for f in r.findings))
+
+    def test_pip_audit_empty_object_is_invalid_even_on_exit_zero(self):
+        # `{}` has no 'dependencies' list - that is not a scan result, whatever
+        # the exit code says.
+        r = self._check(self._pyrepo(), "pip-audit", _proc(code=0, out="{}"))
+        self.assertEqual(r.code, EXIT_INVALID)
+
+    def test_pip_audit_advisories_still_surface(self):
+        # Discriminating: the INVALID gate must not eat real advisories.
+        doc = {"dependencies": [{"name": "requests", "version": "2.19.0",
+                                 "vulns": [{"id": "PYSEC-1", "aliases": [],
+                                            "fix_versions": ["2.20.0"]}]}]}
+        r = self._check(self._pyrepo(), "pip-audit", _proc(code=1, out=json.dumps(doc)))
+        self.assertEqual(r.code, EXIT_FINDING)
+        self.assertTrue(any("vulnerable python dependency" in f.what for f in r.findings))
+
+    def test_failed_npm_audit_is_invalid_not_clean(self):
+        r = self._check(self._npmrepo(), "npm", _proc(code=1, err="npm ERR! network"))
+        self.assertEqual(r.code, EXIT_INVALID, [f.what for f in r.findings])
+        self.assertTrue(any("no usable report" in f.what for f in r.findings))
+
+    def test_npm_error_envelope_is_invalid_even_when_it_parses(self):
+        # npm error output IS valid JSON - it just is not an audit report.
+        r = self._check(self._npmrepo(), "npm",
+                        _proc(code=1, out=json.dumps({"error": {"code": "EAUDITNOLOCK"}})))
+        self.assertEqual(r.code, EXIT_INVALID)
+
+    def test_npm_advisories_still_surface(self):
+        doc = {"vulnerabilities": {"lodash": {}},
+               "metadata": {"vulnerabilities": {"high": 1, "critical": 0}}}
+        r = self._check(self._npmrepo(), "npm", _proc(code=1, out=json.dumps(doc)))
+        self.assertEqual(r.code, EXIT_FINDING)
+        self.assertTrue(any("high/critical advisory" in f.what for f in r.findings))
+
+    def test_npm_clean_report_is_clean(self):
+        doc = {"vulnerabilities": {},
+               "metadata": {"vulnerabilities": {"high": 0, "critical": 0}}}
+        r = self._check(self._npmrepo(), "npm", _proc(code=0, out=json.dumps(doc)))
+        self.assertEqual(r.code, EXIT_CLEAN, [f.what for f in r.findings])
 
 
 if __name__ == "__main__":

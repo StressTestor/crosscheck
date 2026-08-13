@@ -290,23 +290,27 @@ def check(
             if p.timed_out:
                 r.add(Finding(what="pip-audit timed out - dependencies NOT scanned", severity="invalid"))
             else:
-                # Structured output. Grepping GHSA|PYSEC|CVE out of prose meant
-                # a formatting change silently emptied the findings list.
+                # Structured output, validated for SHAPE, not just parseability.
+                # Grepping GHSA|PYSEC|CVE out of prose meant a formatting change
+                # silently emptied the findings list - and empty stdout becoming
+                # `{}` was the same bug from the other side: once `{}` "parsed",
+                # the nonzero exit was ignored and a failed pip-audit returned
+                # CLEAN. A scan result must carry the schema it claims. XX
                 try:
-                    doc = json.loads(p.out) if p.out.strip() else {}
+                    doc = json.loads(p.out) if p.out.strip() else None
                 except ValueError:
                     doc = None
-                if doc is None:
-                    if p.code != 0:
-                        r.add(
-                            Finding(
-                                what="pip-audit failed and its output could not be parsed",
-                                detail=p.text().strip()[-300:],
-                                severity="invalid",
-                            )
-                        )
+                if not isinstance(doc, dict) or not isinstance(doc.get("dependencies"), list):
+                    r.add(
+                        Finding(
+                            what="pip-audit produced no usable report - dependencies NOT scanned",
+                            detail=f"exit {p.code}; expected a JSON object with a 'dependencies' list",
+                            fix="re-run pip-audit by hand; do not treat this as a clean scan",
+                            severity="invalid",
+                        ).with_foreign("pip-audit", p.text().strip()[-300:])
+                    )
                 else:
-                    for dep in doc.get("dependencies", []) or []:
+                    for dep in doc.get("dependencies") or []:
                         for v in dep.get("vulns", []) or []:
                             ids = ", ".join([v.get("id", "?")] + (v.get("aliases") or [])[:2])
                             fixes = ", ".join(v.get("fix_versions") or []) or "no fixed version published"
@@ -344,21 +348,25 @@ def check(
             if p.timed_out:
                 r.add(Finding(what="npm audit timed out - dependencies NOT scanned", severity="invalid"))
             else:
+                # Same shape-validation as pip-audit above: empty stdout used to
+                # become `{}`, which "parsed" and suppressed the nonzero exit.
+                # An npm error envelope has no metadata.vulnerabilities either,
+                # so both failure modes land in the same INVALID. XX
                 try:
-                    doc = json.loads(p.out) if p.out.strip() else {}
+                    doc = json.loads(p.out) if p.out.strip() else None
                 except ValueError:
                     doc = None
-                if doc is None:
-                    if p.code != 0:
-                        r.add(
-                            Finding(
-                                what="npm audit failed and its output could not be parsed",
-                                detail=p.text().strip()[-300:],
-                                severity="invalid",
-                            )
-                        )
+                meta = (doc.get("metadata") or {}).get("vulnerabilities") if isinstance(doc, dict) else None
+                if not isinstance(meta, dict):
+                    r.add(
+                        Finding(
+                            what="npm audit produced no usable report - dependencies NOT scanned",
+                            detail=f"exit {p.code}; expected metadata.vulnerabilities in the JSON output",
+                            fix="re-run npm audit by hand; do not treat this as a clean scan",
+                            severity="invalid",
+                        ).with_foreign("npm audit", p.text().strip()[-300:])
+                    )
                 else:
-                    meta = (doc.get("metadata") or {}).get("vulnerabilities") or {}
                     high = int(meta.get("high", 0) or 0) + int(meta.get("critical", 0) or 0)
                     if high:
                         names = sorted((doc.get("vulnerabilities") or {}).keys())[:8]

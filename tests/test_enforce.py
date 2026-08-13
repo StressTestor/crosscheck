@@ -131,13 +131,52 @@ class TestEnforce(unittest.TestCase):
 
     def test_pinned_allowed_case_catches_over_blocking(self):
         # A refusal harness with no allowed-cases rewards a target that refuses
-        # everything.
+        # everything. TARGET_ENFORCED refuses (recognisably), so the pinned
+        # negative broke: over-block, a real finding.
         t = self._target(TARGET_ENFORCED)
         c = self._nproc_control(t)
         c["expect"] = "allowed"
+        c["allowed_when"] = {"exit_code_in": [0]}
         r = enforce.check(self._spec(c))
         self.assertEqual(r.code, EXIT_FINDING)
         self.assertTrue(any("pins as ALLOWED was refused" in f.what for f in r.findings))
+
+    def test_allowed_without_allowed_when_is_invalid_before_the_probe_fires(self):
+        # "Allowed" used to mean merely "not refused", so a crashed
+        # allowed-case read as successfully allowed. A spec that cannot name
+        # what success looks like has not pinned anything.
+        marker = os.path.join(self.d, "fired")
+        t = self._target(f"#!/bin/sh\ntouch {marker}\nexit 0\n")
+        c = self._nproc_control(t)
+        c["expect"] = "allowed"
+        r = enforce.check(self._spec(c))
+        self.assertEqual(r.code, EXIT_INVALID)
+        self.assertEqual(r.data["verdicts"]["nproc"], enforce.UNTESTABLE)
+        self.assertFalse(os.path.exists(marker), "a malformed spec earned an execution")
+
+    def test_crashed_allowed_case_is_untestable_not_allowed(self):
+        # Exit 3 with no refusal marker satisfies neither allowed_when nor
+        # refused_when: a crash decides nothing, in either direction.
+        t = self._target("#!/bin/sh\necho 'Traceback: boom' >&2\nexit 3\n")
+        c = self._nproc_control(t)
+        c["expect"] = "allowed"
+        c["allowed_when"] = {"exit_code_in": [0]}
+        c["refused_when"] = {"exit_code_not_in": [0], "stderr_contains": "refused"}
+        c["self_report"] = {}
+        r = enforce.check(self._spec(c))
+        self.assertEqual(r.code, EXIT_INVALID)
+        self.assertEqual(r.data["verdicts"]["nproc"], enforce.UNTESTABLE)
+
+    def test_allowed_case_that_succeeds_is_enforced(self):
+        # Discriminating: the positive predicate must not over-block the
+        # legitimate case it exists to protect.
+        t = self._target("#!/bin/sh\necho 'ok, did the thing'\nexit 0\n")
+        c = self._nproc_control(t)
+        c["expect"] = "allowed"
+        c["allowed_when"] = {"exit_code_in": [0], "stdout_contains": "ok"}
+        c["self_report"] = {}
+        r = enforce.check(self._spec(c))
+        self.assertEqual(r.data["verdicts"]["nproc"], enforce.ENFORCED)
 
     def test_probe_must_be_an_argv_list(self):
         c = self._nproc_control("x")
@@ -202,6 +241,23 @@ class TestEnforce(unittest.TestCase):
         b["declares"] = "totally different prose"
         self.assertEqual(enforce.control_fingerprint(a), enforce.control_fingerprint(b))
 
+    def test_fingerprint_covers_cwd_env_and_allowed_when(self):
+        # All three change what executes or how the outcome is read, so an old
+        # proof must not survive a change to any of them.
+        t = self._target(TARGET_ENFORCED)
+        a = self._nproc_control(t)
+        self.assertNotEqual(
+            enforce.control_fingerprint(a, cwd="/somewhere"),
+            enforce.control_fingerprint(a, cwd="/elsewhere"),
+            "cwd changes which program a relative probe path names",
+        )
+        b = self._nproc_control(t)
+        b["env"] = {"MODE": "prod"}
+        self.assertNotEqual(enforce.control_fingerprint(a), enforce.control_fingerprint(b))
+        c = self._nproc_control(t)
+        c["allowed_when"] = {"exit_code_in": [0]}
+        self.assertNotEqual(enforce.control_fingerprint(a), enforce.control_fingerprint(c))
+
     def test_every_fired_probe_is_audited_with_a_hash_chain(self):
         import tempfile as _tf
         log = os.path.join(_tf.mkdtemp(), "probe-audit.jsonl")
@@ -258,10 +314,24 @@ class TestEnforce(unittest.TestCase):
         t = self._target(TARGET_ENFORCED)
         c = self._nproc_control(t)
         c["expect"] = "allowed"
+        c["allowed_when"] = {"exit_code_in": [0]}
         c["self_report"] = {}
         r = enforce.check(self._spec(c, name="al"), record_red=True)
         self.assertEqual(r.data["verdicts"]["nproc"], enforce.UNENFORCED)
-        self.assertIn(enforce.control_fingerprint(c), enforce._load_ledger())
+        self.assertIn(enforce.control_fingerprint(c, cwd=self.d), enforce._load_ledger())
+
+    def test_unwritable_ledger_makes_record_red_invalid(self):
+        # A red run that was observed but never recorded proves nothing next
+        # run - and the old code said "recorded" anyway.
+        broken = self._target(TARGET_UNENFORCED_HONEST)
+        c = self._nproc_control(broken)
+        c["self_report"] = {}
+        # A DIRECTORY at the ledger path fails the write even when running as
+        # root, where a chmod-based fixture would silently pass.
+        os.makedirs(os.path.join(self.specs, ".redruns.json"))
+        r = enforce.check(self._spec(c), record_red=True)
+        self.assertEqual(r.code, EXIT_INVALID, [f.what for f in r.findings])
+        self.assertTrue(any("could NOT be recorded" in f.what for f in r.findings))
 
     def test_missing_spec_is_invalid(self):
         self.assertEqual(enforce.check("nope").code, EXIT_INVALID)

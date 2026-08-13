@@ -112,12 +112,13 @@ class TestVrp(unittest.TestCase):
         r = vrp.check("p", "dns hijack", today=self.today)
         self.assertEqual(r.code, EXIT_CLEAN)
 
-    def _floor_policy(self, name="g"):
+    def _floor_policy(self, name="g", verified=True):
         self._policy(
             name,
             eligible_classes=["product vulnerability"],
             floor={
                 "source_url": "https://example.invalid/rules",
+                "verified": verified,
                 "unrewarded": [
                     {"tier": "OT2", "classes": ["product vulnerability"], "quote": "no reward at OT2"},
                     {"tier": "OT3", "classes": ["product vulnerability"], "quote": "no reward at OT3"},
@@ -133,6 +134,28 @@ class TestVrp(unittest.TestCase):
         self.assertEqual(r.code, EXIT_FINDING)
         self.assertTrue(any("pays NOTHING at tier OT2" in f.what for f in r.findings))
         self.assertTrue(any("no reward at OT2" in (f.detail or "") for f in r.findings))
+
+    def test_unverified_floor_row_is_judgment_not_finding(self):
+        # The transcript admits it was not read off the primary page. A hard
+        # $0 FINDING off unverified provenance talks you out of real work; the
+        # machine verdict has to carry the uncertainty, not just a comment.
+        r = vrp.check(self._floor_policy(verified=False), "product vulnerability",
+                      tier="OT2", today=self.today)
+        self.assertEqual(r.code, EXIT_JUDGMENT, [f.what for f in r.findings])
+        self.assertTrue(any("UNVERIFIED" in f.what for f in r.findings))
+        # The quote still travels with the judgment so it can be checked.
+        self.assertTrue(any("no reward at OT2" in (f.detail or "") for f in r.findings))
+
+    def test_absent_verified_stamp_means_unverified(self):
+        # Absence of the stamp is not verification - same doctrine as
+        # "absence of a rule is not permission".
+        self._policy(
+            "nostamp",
+            eligible_classes=["product vulnerability"],
+            floor={"unrewarded": [{"tier": "OT2", "classes": ["product vulnerability"], "quote": "q"}]},
+        )
+        r = vrp.check("nostamp", "product vulnerability", tier="OT2", today=self.today)
+        self.assertEqual(r.code, EXIT_JUDGMENT)
 
     def test_same_class_at_a_rewarded_tier_is_clean(self):
         # Discriminating: the floor must not blanket-block the class.
@@ -156,7 +179,8 @@ class TestVrp(unittest.TestCase):
         self._policy(
             "g2",
             eligible_classes=["self-xss"],
-            floor={"unrewarded": [{"tier": "OT2", "classes": ["xss"], "quote": "q"}]},
+            floor={"verified": True,
+                   "unrewarded": [{"tier": "OT2", "classes": ["xss"], "quote": "q"}]},
         )
         self.assertEqual(vrp.check("g2", "self-xss", tier="OT2", today=self.today).code, EXIT_FINDING)
 

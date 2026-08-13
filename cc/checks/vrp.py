@@ -131,18 +131,40 @@ def _floor_verdict(pol: dict, vuln_class: str, tier: str | None, r: Result) -> N
         return
 
     r.data["tier"] = tier
+    # Provenance has to move the exit code, not just sit in a comment. The
+    # google-oss-vrp floor was transcribed from search summaries because the
+    # primary pages are JS-rendered - and an unverified $0 verdict that says
+    # "do NOT spend PoC time here" is the tool talking you out of real work
+    # on evidence it never read. Absence of the stamp is not verification. XX
+    verified = floor.get("verified") is True
     for row in floor.get("unrewarded", []) or []:
         if str(row.get("tier", "")).strip().lower() != tier.strip().lower():
             continue
         for cls in row.get("classes", []) or []:
             if _class_matches(cls, vuln_class):
-                r.add(
-                    Finding(
-                        what=f"'{vuln_class}' pays NOTHING at tier {tier} for {pol.get('program', 'this program')}",
-                        detail=row.get("quote", "") or "(no quote transcribed - verify on the program page)",
-                        fix="pick a class or project that clears the floor - do NOT spend PoC time here",
+                if verified:
+                    r.add(
+                        Finding(
+                            what=f"'{vuln_class}' pays NOTHING at tier {tier} for {pol.get('program', 'this program')}",
+                            detail=row.get("quote", "") or "(no quote transcribed - verify on the program page)",
+                            fix="pick a class or project that clears the floor - do NOT spend PoC time here",
+                        )
                     )
-                )
+                else:
+                    r.add(
+                        Finding(
+                            what=(
+                                f"'{vuln_class}' is transcribed as paying NOTHING at tier {tier} "
+                                f"for {pol.get('program', 'this program')} - but the transcription is UNVERIFIED"
+                            ),
+                            detail=row.get("quote", "") or "(no quote transcribed - verify on the program page)",
+                            fix=(
+                                "re-verify against the live rules page, then set floor.verified: true - "
+                                "do not let an unverified $0 verdict talk you out of real work"
+                            ),
+                            severity="judgment",
+                        )
+                    )
                 return
     r.note(f"tier {tier}: '{vuln_class}' is not on the unrewarded list")
 

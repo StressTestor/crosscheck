@@ -138,6 +138,7 @@ class TestVrpTierVocabulary(unittest.TestCase):
                 "program": "p", "fetched_at": "2026-08-09", "in_scope": ["x.com"],
                 "eligible_classes": ["product vulnerability"],
                 "floor": {
+                    "verified": True,
                     "tiers": {"OT0": "flagship", "OT2": "standard"},
                     "unrewarded": [{"tier": "OT2", "classes": ["product vulnerability"], "quote": "q"}],
                 },

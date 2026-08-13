@@ -62,9 +62,13 @@ cc enforce <name> --record-red
 ```
 
 Any control that comes back UNENFORCED there is recorded in `specs/.redruns.json`,
-keyed by a fingerprint of `name + probe + refused_when + expect`. Editing the
-refusal rule changes the fingerprint and invalidates the proof, which is the
-point. Editing an unrelated control does not.
+keyed by a fingerprint of `name + probe + refused_when + allowed_when + expect +
+env + cwd`. Editing anything that changes what executes or how the outcome is
+read changes the fingerprint and invalidates the proof, which is the point.
+Editing an unrelated control does not. (cwd and env were added to the
+fingerprint later - the same relative probe path in a different directory is a
+different program - so proofs recorded before that change no longer match and
+must be re-recorded.)
 
 Prune stale entries when you change a rule: a proof recorded against an old
 `refused_when` would otherwise bless that rule again if someone reverted it.
@@ -113,6 +117,7 @@ mitigation that quietly stops happening by week two.
 | `probe` | **argv list, never a shell string.** the suite obeys the sink rule it enforces on others, and it matters most here |
 | `expect` | `refused` (default) or `allowed` |
 | `refused_when` | how a refusal is recognised. keys: `exit_code_in`, `exit_code_not_in`, `stdout_contains`, `stderr_contains`, `output_contains`. **all stated conditions must hold** |
+| `allowed_when` | **required when `expect` is `allowed`.** how success is recognised, same keys as `refused_when`. absence of a refusal is not proof of success - without this, a crashed allowed-case reads as allowed |
 | `self_report` | optional. lets `UNENFORCED` be upgraded to `UNENFORCED-SILENT` |
 | `self_report.from` | `stdout_json` or `file` (+ `file:`) |
 | `self_report.claims_applied_when` | `absent_from` (the codecalc shape), `present_in`, or `equals` (+ `value:`) |
@@ -123,8 +128,16 @@ Use `"expect": "allowed"` for operations that must keep working. A refusal
 harness with no allowed-cases silently rewards a target that refuses
 everything, and "we hardened it" then means "we broke it".
 
+An allowed-case needs an `allowed_when` rule - a POSITIVE match for success.
+"Allowed" was once implemented as merely "not refused", so an allowed-case that
+crashed (and therefore never matched the refusal marker) counted as
+successfully allowed. Now: `allowed_when` holds -> the negative held;
+`refused_when` matches instead -> over-block, a FINDING; neither -> the probe
+crashed, which decides nothing and reports UNTESTABLE.
+
 `crosscheck-self.json` carries one: a genuinely clean, fully-pinned repo must
-still return CLEAN under `--require-sast`.
+still return CLEAN under `--require-sast`, recognised by exit 0 plus `CLEAN` in
+the output.
 
 ## the guard does not see these probes
 

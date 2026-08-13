@@ -35,6 +35,12 @@
         "--no-audit"
       ],
       "expect": "allowed",
+      "allowed_when": {
+        "exit_code_in": [
+          0
+        ],
+        "output_contains": "CLEAN"
+      },
       "refused_when": {
         "exit_code_not_in": [
           0

@@ -15,6 +15,8 @@
   "floor": {
     "source_url": "https://bughunters.google.com/blog/ossvrp-rule-updates-2026",
     "fetched_at": "2026-08-09",
+    "verified": false,
+    "_verified_note": "false because the rows below came from Google-domain search summaries, not the published table (see _provenance). Unverified rows rule JUDGMENT, not FINDING. Set true only after machine- or eyeball-reading the live rules page.",
     "tiers": {
       "OT0": "Flagship - e.g. Bazel, Angular, Golang",
       "OT1": "Important - high-impact projects with significant community footprint",
