@@ -70,7 +70,16 @@ def _composite_actions(repo: str) -> list[str]:
     return out
 
 
-def _scan_pins(path: str, repo: str, r: Result) -> None:
+def _scan_pins(path: str, repo: str, r: Result, as_note: bool = False) -> None:
+    """Line-oriented pin grep. `as_note` demotes hits to notes.
+
+    The greps are the DEGRADED detector for machines with no YAML-aware
+    scanner. They are line-oriented, so a `uses:` string inside a `run: |`
+    block is a false positive - and a grep FINDING cannot be cancelled by the
+    scanner that knows better, because FINDING outranks everything but
+    INVALID. So when zizmor actually analyzed the workflows, its verdict on
+    pins/permissions is authoritative and the greps demote to notes. XX
+    """
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             lines = fh.readlines()
@@ -87,6 +96,9 @@ def _scan_pins(path: str, repo: str, r: Result) -> None:
         if ref.startswith(("./", "../", "docker://")):
             continue  # local or docker action, no SHA to pin
         if "@" not in ref:
+            if as_note:
+                r.note(f"pin grep (zizmor is authoritative): {rel}:{i} uses an action with no ref")
+                continue
             r.add(
                 Finding(
                     what="action used with no ref at all",
@@ -98,6 +110,9 @@ def _scan_pins(path: str, repo: str, r: Result) -> None:
             continue
         _name, _, pin = ref.rpartition("@")
         if not _SHA_RE.match(pin):
+            if as_note:
+                r.note(f"pin grep (zizmor is authoritative): {rel}:{i} looks tag-pinned, not SHA-pinned")
+                continue
             r.add(
                 Finding(
                     what="third-party action pinned to a mutable tag, not a commit SHA",
@@ -108,7 +123,7 @@ def _scan_pins(path: str, repo: str, r: Result) -> None:
             )
 
 
-def _scan_permissions(path: str, repo: str, r: Result) -> None:
+def _scan_permissions(path: str, repo: str, r: Result, as_note: bool = False) -> None:
     rel = os.path.relpath(path, repo)
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
@@ -116,6 +131,9 @@ def _scan_permissions(path: str, repo: str, r: Result) -> None:
     except OSError:
         return
     if not any(_PERMS_RE.match(ln) for ln in text.splitlines()):
+        if as_note:
+            r.note(f"permissions grep (zizmor is authoritative): {rel} declares no permissions block")
+            return
         r.add(
             Finding(
                 what="workflow declares no permissions block - inherits the repo default token scope",
@@ -145,11 +163,6 @@ def check(
     # a vulnerable requirements.txt. The dependency pass below runs regardless.
     if not wfs and not acts:
         r.note("no GitHub Actions workflows in this repo")
-
-    for p in wfs + acts:
-        _scan_pins(p, repo, r)
-    for p in wfs:
-        _scan_permissions(p, repo, r)
 
     # ---- delegate the semantics ------------------------------------------
     sast_ran = []
@@ -257,6 +270,26 @@ def check(
             r.note(f"zizmor exited {p_neutral.code} WITHOUT scanning: "
                    + (p_neutral.text().strip()[-200:] or "(no output)"))
     r.data["sast"] = sast_ran
+
+    # ---- the greps: degraded detector, not a second authority -------------
+    # zizmor owns pins and permissions semantics (unpinned-uses,
+    # excessive-permissions) and is YAML-aware; the greps are line-oriented
+    # and can misread a `uses:` inside a `run: |` block. When zizmor actually
+    # analyzed the workflows, a grep FINDING it disagrees with could never be
+    # cancelled - FINDING outranks - so the greps demote to notes and zizmor's
+    # verdict stands. When zizmor did NOT run, the greps stay findings, and
+    # the no-SAST judgment / --require-sast gate below still fires alongside.
+    # (actionlint alone does not demote them: it lints syntax and shell, it
+    # does not rule on pinning or token scope.)
+    grep_as_note = "zizmor" in sast_ran
+    for p in wfs:
+        _scan_pins(p, repo, r, as_note=grep_as_note)
+        _scan_permissions(p, repo, r, as_note=grep_as_note)
+    for p in acts:
+        # zizmor was pointed at .github/workflows/ only - composite action.yml
+        # files were never in its analysis, so the grep stays authoritative
+        # there even when zizmor ran.
+        _scan_pins(p, repo, r, as_note=False)
 
     if require_sast and not sast_ran:
         return r.fail(

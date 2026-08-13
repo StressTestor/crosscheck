@@ -51,12 +51,16 @@ class TestCi(unittest.TestCase):
         return d
 
     def test_unpinned_action_is_a_finding(self):
-        r = ci.check(self._repo(UNPINNED), audit=False)
+        # have=False pins the degraded-detector path: with no YAML-aware
+        # scanner, the grep is all there is and it must stay a FINDING.
+        with patch.object(ci, "have", lambda t: False):
+            r = ci.check(self._repo(UNPINNED), audit=False)
         self.assertEqual(r.code, EXIT_FINDING)
         self.assertTrue(any("mutable tag" in f.what for f in r.findings))
 
     def test_missing_permissions_block_is_a_finding(self):
-        r = ci.check(self._repo(UNPINNED), audit=False)
+        with patch.object(ci, "have", lambda t: False):
+            r = ci.check(self._repo(UNPINNED), audit=False)
         self.assertTrue(any("no permissions block" in f.what for f in r.findings))
 
     def test_pinned_and_scoped_has_no_pin_or_permission_finding(self):
@@ -198,6 +202,78 @@ class TestCi(unittest.TestCase):
             fh.write("runs:\n  steps:\n    - uses: some/action@v1\n")
         r = ci.check(d, audit=False)
         self.assertTrue(any("action.yml" in f.where for f in r.findings), [f.where for f in r.findings])
+
+
+class TestGrepsDeferToZizmor(unittest.TestCase):
+    """The line greps are the degraded detector, not a second authority.
+
+    A `uses:` string inside a `run: |` block is grep-visible but not an
+    action reference. When zizmor actually analyzed the workflows, a grep
+    FINDING could never be cancelled by the scanner that knows better -
+    FINDING outranks - so the greps demote to notes. When no YAML-aware
+    scanner ran, they stay findings and the no-SAST judgment fires alongside.
+    """
+
+    # The `uses:` line lives inside a run: | script (a generated file), so the
+    # line grep sees an "unpinned action" that zizmor knows is not one.
+    WF = (
+        "name: x\n"
+        "on: [push]\n"
+        "permissions: {}\n"
+        "jobs:\n"
+        "  a:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: |\n"
+        "          cat > generated.yml <<'EOF'\n"
+        "          uses: fake/action@v1\n"
+        "          EOF\n"
+    )
+
+    def _repo(self):
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, ".github", "workflows"))
+        with open(os.path.join(d, ".github", "workflows", "w.yml"), "w") as fh:
+            fh.write(self.WF)
+        return d
+
+    def test_grep_demotes_to_a_note_when_zizmor_ran(self):
+        # Mocked zizmor: credited (exit 0), clean analysis - its verdict on
+        # pins/permissions is authoritative over the line grep.
+        with patch.object(ci, "have", lambda t: t == "zizmor"), \
+             patch.object(ci, "run", lambda *a, **k: _proc(code=0, out="")):
+            r = ci.check(self._repo(), audit=False)
+        self.assertFalse(any("mutable tag" in f.what for f in r.findings),
+                         [f.what for f in r.findings])
+        self.assertTrue(any("pin grep" in n for n in r.notes), r.notes)
+        self.assertEqual(r.code, EXIT_CLEAN, [f.what for f in r.findings])
+
+    def test_grep_stays_a_finding_when_no_sast_ran(self):
+        with patch.object(ci, "have", lambda t: False):
+            r = ci.check(self._repo(), audit=False)
+        self.assertTrue(any("mutable tag" in f.what for f in r.findings))
+        self.assertEqual(r.code, EXIT_FINDING)
+
+    def test_actionlint_alone_does_not_demote_the_greps(self):
+        # actionlint lints syntax and shell; it does not rule on pinning or
+        # token scope, so crediting it must not silence the pin grep.
+        with patch.object(ci, "have", lambda t: t == "actionlint"), \
+             patch.object(ci, "run", lambda *a, **k: _proc(code=0, out="")):
+            r = ci.check(self._repo(), audit=False)
+        self.assertTrue(any("mutable tag" in f.what for f in r.findings))
+
+    def test_composite_action_greps_never_demote(self):
+        # zizmor is pointed at .github/workflows/ only; a composite action.yml
+        # was never in its analysis, so the grep stays authoritative there.
+        d = self._repo()
+        os.makedirs(os.path.join(d, ".github", "actions", "thing"))
+        with open(os.path.join(d, ".github", "actions", "thing", "action.yml"), "w") as fh:
+            fh.write("runs:\n  steps:\n    - uses: some/action@v1\n")
+        with patch.object(ci, "have", lambda t: t == "zizmor"), \
+             patch.object(ci, "run", lambda *a, **k: _proc(code=0, out="")):
+            r = ci.check(d, audit=False)
+        self.assertTrue(any("action.yml" in f.where for f in r.findings),
+                        [f.where for f in r.findings])
 
 
 class TestDependencyAuditNeverFakesAScan(unittest.TestCase):

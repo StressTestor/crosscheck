@@ -55,7 +55,7 @@ crosscheck/
                           #   given KIND of work belongs on
   specs/                  # hand-written enforce specs + fixtures (see its README)
                           #   .redruns.json = proof each control has been seen to FAIL
-  tests/                  # unittest; 166 tests, incl. suite-wide detector + provenance invariants
+  tests/                  # unittest; 188 tests, incl. suite-wide detector + provenance invariants
   install.sh              # ~/.local/bin/cc launcher + optional pre-push hook
 ```
 
@@ -185,6 +185,7 @@ for exactly those.
 | `pr-branch` picked a base you did not expect | the repo runs two long-lived branches and the declared default is not this branch's base | normal, not a misconfiguration: odysseus declares `dev` (the maintainer/integration branch) while contribution branches are cut from `main`. the heuristic resolves both modes; inspect `data.base_candidates` for the ahead/behind of every candidate |
 | `ci` finds nothing on a bad repo | no SAST installed | `pipx install zizmor==1.25.2 && brew install actionlint`, or pass `--require-sast` to make the gap loud |
 | `baseline` says INVALID on a clean tree | nothing to compare | that is correct; use `verify-change` for a committed change |
+| `baseline` says INVALID because the run created gitignored files | the suite writes build/output artifacts the stash cannot revert, so the clean run would reuse dirty-generated state | point the suite's output somewhere disposable, or delete the artifacts and re-run. known interpreter caches (`__pycache__` etc.) are already excluded |
 | `baseline` refuses over a dirty submodule | `git stash` does not recurse into submodules | commit or stash inside the submodule first — the alternative is running your suite over work nothing can restore |
 | `ci` says a scanner "exited WITHOUT scanning" | malformed `.github/zizmor.yml` / `.github/actionlint.yaml`, or not a git repo | fix the config. it is deliberately not credited as a scan — the audited repo must not be able to disable its own audit |
 | `baseline` says changes are in the stash | `git stash pop` hit a conflict | resolve it by hand; the tool reports loudly rather than swallowing it |
@@ -219,11 +220,13 @@ regression runner (ghost blocks its own tester from inside an agent).
 
 ## last updated
 
-2026-08-13 — 7 checks, 166 tests, skill + adjudicate workflow, own CI.
-Three more external-review items closed: shape-validated dependency audits,
-JUDGMENT for unverified VRP floor rows, and a positive `allowed_when` predicate
+2026-08-13 — 7 checks, 188 tests, skill + adjudicate workflow, own CI.
+Six more external-review items closed: shape-validated dependency audits,
+JUDGMENT for unverified VRP floor rows, a positive `allowed_when` predicate
 for `enforce` allowed-cases (plus a red-run fingerprint that covers cwd/env and
-a ledger write that fails loud).
+a ledger write that fails loud), path-scoped `scope` entries with the shipped-
+policy smoke test, `ci` greps that defer to zizmor when it actually ran, and a
+`baseline` that refuses to attribute over dirty-generated gitignored state.
 An external xhigh review (gpt-5.6-sol, `docs/codex-review-2026-08-10.md`) found
 17 defects the in-house gates missed; the verdict-corrupting subset is fixed and
 regression-tested in `tests/test_verdict_integrity.py`. Open items from it are
@@ -234,9 +237,15 @@ paths, a false-INELIGIBLE in `vrp`, and one unrecoverable data-loss path in `bas
 
 **OPEN, from the external review** (not yet fixed — do not read the suite as
 covering these):
-- `scope` has **zero** usable policy: its only real dataset stores repo paths
-  (`github.com/google`) while the matcher compares DNS hosts, so every Google
-  OSS URL normalises to `github.com` and reports OUT. Deletion recommended.
+- ~~`scope` has **zero** usable policy~~ — **FIXED**, by teaching the matcher
+  the data's shape instead of deleting the check: a policy entry containing
+  `/` (`github.com/google`) now matches on host AND whole path segments, so
+  the org entries in the one real policy are consumable.
+  `github.com/google/osv-scalibr` is IN; `github.com/google-not`,
+  `github.com/notgoogle` and bare `github.com` are OUT. The smoke test
+  `policies/README.md` always demanded now exists and runs the SHIPPED policy,
+  not a fixture. Control characters in operator input are rejected outright
+  and rejected input is quarantined in `foreign`, never `where`.
 - foreign text still reaches trusted `what`/`detail`/`fix`/`where`/`notes`/`data`
   in `ci`, `secrets`, `baseline` and `pr-branch`. The emission invariant is
   real for the `foreign` field but is NOT enforced at every producer, and the
@@ -250,9 +259,14 @@ covering these):
   with `-config-file /dev/null` for the same reason. Verified: a
   `pull_request_target` + template-injection workflow with a valid
   ignore-everything `zizmor.yml` used to report CLEAN.
-- `ci`'s regex pin/permission findings cannot be cancelled by the YAML-aware
-  scanners, because FINDING outranks. "The real linter runs alongside" is not
-  mitigation when it cannot override.
+- ~~`ci`'s regex pin/permission findings cannot be cancelled by the YAML-aware
+  scanners~~ — **FIXED.** the greps are now explicitly the DEGRADED detector:
+  when zizmor actually analyzed the workflows its verdict on pins/permissions
+  is authoritative and the grep hits demote to notes; when no YAML-aware
+  scanner ran they stay FINDINGs and the no-SAST judgment fires alongside.
+  actionlint alone does not demote them (it does not rule on pinning or token
+  scope), and composite `action.yml` greps never demote because zizmor is
+  pointed at `.github/workflows/` only.
 - ~~`enforce` `expect:"allowed"` is implemented as merely *not refused*~~ —
   **FIXED.** `expect:"allowed"` now requires an `allowed_when` rule (a POSITIVE
   match for success) and refuses to fire the probe without one. Not-allowed
@@ -266,8 +280,13 @@ covering these):
   SHAPE, not just parseability: pip-audit must produce a `dependencies` list,
   npm must produce `metadata.vulnerabilities`, and anything else (including a
   clean-exit empty object) is INVALID, never zero findings.
-- `baseline` lets gitignored build/cache state survive the stash, so
-  dirty-generated artifacts can make an introduced failure look pre-existing.
+- ~~`baseline` lets gitignored build/cache state survive the stash~~ —
+  **FIXED.** gitignored state is snapshotted (path, size, mtime) around the
+  dirty run: files created or deleted by it are INVALID before the stash is
+  even taken; files modified in place are JUDGMENT naming the paths. Known
+  interpreter cache churn (`__pycache__`, `.pytest_cache`, `*.pyc`, ...) is
+  excluded so every Python baseline does not become a wall that gets routed
+  around - CPython owns pyc invalidation.
 - ~~the `google-oss-vrp` floor emits a hard FINDING off unverified provenance~~
   — **FIXED.** floor rows now rule JUDGMENT unless the floor carries
   `"verified": true`; absence of the stamp is not verification. The shipped
@@ -290,8 +309,9 @@ covering these):
 - **`specs/.redruns.json` is a discipline record, not a security boundary.**
   Anyone who can edit a spec can edit it. It exists to stop honest mistakes.
 - `ci`'s `uses:`/`permissions:` greps are line-oriented, not YAML-aware; a
-  `uses:` string inside a `run: |` block can be misread. zizmor/actionlint are
-  the YAML-aware authority and run alongside.
+  `uses:` string inside a `run: |` block can be misread. zizmor is the
+  YAML-aware authority: when it ran, the greps demote to notes and its verdict
+  stands; when it did not, the greps are the degraded detector and say so.
 - the payout `floor` for `google-oss-vrp` was transcribed from Google-domain
   search summaries, **not machine-read** from the published table (both primary
   pages are JS-rendered and return title-only to a fetch). The machine verdict

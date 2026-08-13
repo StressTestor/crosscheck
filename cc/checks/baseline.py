@@ -31,6 +31,7 @@ Judgment calls:
 
 from __future__ import annotations
 
+import os
 import re
 
 from ..result import Result, Finding
@@ -38,6 +39,61 @@ from ..run import run, have
 from .. import gitutil as G
 
 CHECK = "baseline"
+
+# Interpreter/test-runner cache churn that changes on effectively every run
+# and whose invalidation the runtime itself owns (CPython re-checks source
+# mtime/size against a pyc, pytest rewrites its lastfailed cache). Treating it
+# as poisoning would make every Python baseline INVALID forever, which is the
+# hard-stop-that-gets-routed-around this suite refuses to ship. Everything NOT
+# on this list is compared strictly.
+_CACHE_DIRS = frozenset({
+    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox",
+    "node_modules",
+})
+
+
+def _is_cache_churn(rel: str) -> bool:
+    if rel.endswith((".pyc", ".pyo")):
+        return True
+    return any(p in _CACHE_DIRS for p in rel.replace(os.sep, "/").split("/"))
+
+
+def _ignored_snapshot(repo: str) -> dict | None:
+    """(size, mtime_ns) for every file git ignores, minus known cache churn.
+
+    None when git could not answer - callers say so instead of comparing air.
+    """
+    p = G.git(repo, "status", "--porcelain", "--ignored=matching")
+    if not p.ok:
+        return None
+    snap: dict[str, tuple[int, int]] = {}
+    for ln in p.out.splitlines():
+        if not ln.startswith("!!"):
+            continue
+        rel = ln[3:].strip()
+        if _is_cache_churn(rel):
+            continue
+        full = os.path.join(repo, rel)
+        if os.path.isdir(full):
+            for root, dirs, files in os.walk(full):
+                dirs[:] = [d for d in dirs if d not in _CACHE_DIRS]
+                for fn in files:
+                    fp = os.path.join(root, fn)
+                    frel = os.path.relpath(fp, repo)
+                    if _is_cache_churn(frel):
+                        continue
+                    try:
+                        st = os.stat(fp)
+                    except OSError:
+                        continue
+                    snap[frel] = (st.st_size, st.st_mtime_ns)
+        else:
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            snap[rel] = (st.st_size, st.st_mtime_ns)
+    return snap
 
 # Failure-name extraction, per ecosystem. First pattern that yields hits wins.
 # Deliberately conservative: a name we cannot parse is better than a wrong set.
@@ -125,8 +181,16 @@ def check(repo: str, suite_argv: list[str], timeout: int = 900, as_dict=None) ->
         r.data["ignored_unprotected"] = ignored[:50]
         r.note(
             f"{len(ignored)} gitignored path(s) are NOT covered by the stash - "
-            f"if your suite writes to them, those writes are not reverted"
+            f"writes there are compared before/after the dirty run instead"
         )
+
+    # Snapshot gitignored state BEFORE the dirty run. The stash protects
+    # tracked and untracked files; it does not touch ignored ones, so a build
+    # artifact or db the dirty run generates survives into the "clean" run and
+    # can make an introduced failure look pre-existing. A note was the old
+    # answer, and a warning nobody reads is not a control on an attribution
+    # check. XX
+    ignored_before = _ignored_snapshot(repo)
 
     p1 = run(suite_argv, cwd=repo, timeout=timeout)
     if p1.timed_out:
@@ -141,6 +205,45 @@ def check(repo: str, suite_argv: list[str], timeout: int = 900, as_dict=None) ->
             "looks like a harness/collection error, not a test failure - fix the runner first",
             data={"stderr_tail": p1.text()[-1500:]},
         )
+
+    # Compare ignored state now, BEFORE the stash: the tree is still intact,
+    # so aborting here costs nothing and cannot strand work.
+    ignored_after = _ignored_snapshot(repo)
+    if ignored_before is None or ignored_after is None:
+        r.note("could not snapshot gitignored state - poisoning via ignored files is UNCHECKED this run")
+    else:
+        created = sorted(set(ignored_after) - set(ignored_before))
+        deleted = sorted(set(ignored_before) - set(ignored_after))
+        modified = sorted(
+            k for k in set(ignored_before) & set(ignored_after)
+            if ignored_before[k] != ignored_after[k]
+        )
+        if created or deleted:
+            # The dirty run changed WHICH ignored files exist. The clean run
+            # would read state the dirty tree generated, so the set difference
+            # could blame - or excuse - the wrong change. No attribution.
+            return Result.invalid(
+                CHECK,
+                f"the dirty-tree run changed which gitignored files exist "
+                f"({len(created)} created, {len(deleted)} deleted) - the stash cannot revert that",
+                "point the suite's build/cache output somewhere disposable, or clean those paths "
+                "first - the clean run would reuse dirty-generated state",
+                data={"ignored_created": created[:50], "ignored_deleted": deleted[:50]},
+            )
+        if modified:
+            # Modified in place (a db, a build output). Known interpreter
+            # cache churn is already excluded, so this is worth a human look -
+            # but a JUDGMENT, not a wall: whether these paths feed the suite
+            # is exactly the thing the tool cannot know.
+            r.add(
+                Finding(
+                    what=f"the dirty-tree run modified {len(modified)} gitignored file(s) the stash will not revert",
+                    detail="if the suite reads them, the clean run reuses dirty-generated state and this attribution is suspect",
+                    fix="check whether these paths feed the suite; if they do, isolate them and re-run",
+                    severity="judgment",
+                ).with_foreign("repo filesystem", ", ".join(modified[:10]))
+            )
+            r.data["ignored_modified"] = modified[:50]
 
     # ---- stash, run 2, restore -------------------------------------------
     # Everything from here until the pop is a window where the user's work
