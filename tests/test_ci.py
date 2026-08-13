@@ -237,11 +237,16 @@ class TestGrepsDeferToZizmor(unittest.TestCase):
             fh.write(self.WF)
         return d
 
+    # What a real clean zizmor run actually prints. An empty-stdout mock used
+    # to pass for "credited, clean" - but zizmor never exits 0 silently, and
+    # pretending it does hid the fact that unparseable output bought credit.
+    ZIZMOR_CLEAN = "No findings to report. Good job!\n"
+
     def test_grep_demotes_to_a_note_when_zizmor_ran(self):
         # Mocked zizmor: credited (exit 0), clean analysis - its verdict on
         # pins/permissions is authoritative over the line grep.
         with patch.object(ci, "have", lambda t: t == "zizmor"), \
-             patch.object(ci, "run", lambda *a, **k: _proc(code=0, out="")):
+             patch.object(ci, "run", lambda *a, **k: _proc(code=0, out=self.ZIZMOR_CLEAN)):
             r = ci.check(self._repo(), audit=False)
         self.assertFalse(any("mutable tag" in f.what for f in r.findings),
                          [f.what for f in r.findings])
@@ -270,10 +275,99 @@ class TestGrepsDeferToZizmor(unittest.TestCase):
         with open(os.path.join(d, ".github", "actions", "thing", "action.yml"), "w") as fh:
             fh.write("runs:\n  steps:\n    - uses: some/action@v1\n")
         with patch.object(ci, "have", lambda t: t == "zizmor"), \
-             patch.object(ci, "run", lambda *a, **k: _proc(code=0, out="")):
+             patch.object(ci, "run", lambda *a, **k: _proc(code=0, out=self.ZIZMOR_CLEAN)):
             r = ci.check(d, audit=False)
         self.assertTrue(any("action.yml" in f.where for f in r.findings),
                         [f.where for f in r.findings])
+
+
+class TestZizmorOutputMustParse(unittest.TestCase):
+    """zizmor's credit depends on us understanding what it said.
+
+    On GitHub-hosted runners the CI env var makes zizmor 1.25 force ANSI
+    color even into a pipe, so every finding line arrived as
+    `\\x1b[1m\\x1b[33mwarning[...]` - the line-anchored parse matched nothing
+    and a pull_request_target + template-injection fixture was credited as
+    clean under zizmor. Caught by this repo's own self-audit canary, not by
+    the suite: the mocks all spoke uncolored zizmor. These do not.
+    """
+
+    WF = (
+        "name: x\non: pull_request_target\njobs:\n  a:\n    runs-on: ubuntu-latest\n"
+        "    steps:\n      - run: echo \"${{ github.event.pull_request.title }}\"\n"
+    )
+    # Byte-for-byte the shape observed on a GitHub-hosted runner.
+    COLORED = (
+        "\x1b[1m\x1b[33mwarning[excessive-permissions]\x1b[0m\x1b[1m: overly broad permissions\x1b[0m\n"
+        "\x1b[1m\x1b[31merror[template-injection]\x1b[0m\x1b[1m: code injection via template expansion\x1b[0m\n"
+        "\x1b[1m2 findings\x1b[0m: 0 informational, 0 low, 1 medium, 1 high\n"
+    )
+
+    def _repo(self):
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, ".github", "workflows"))
+        with open(os.path.join(d, ".github", "workflows", "w.yml"), "w") as fh:
+            fh.write(self.WF)
+        return d
+
+    def _check(self, proc):
+        with patch.object(ci, "have", lambda t: t == "zizmor"), \
+             patch.object(ci, "run", lambda *a, **k: proc):
+            return ci.check(self._repo(), audit=False)
+
+    def test_ansi_colored_findings_still_surface(self):
+        r = self._check(_proc(code=0, out=self.COLORED))
+        self.assertTrue(
+            any("zizmor" in (f.what or "") for f in r.findings),
+            f"colored zizmor findings were dropped: findings={[f.what for f in r.findings]} notes={r.notes}",
+        )
+        self.assertEqual(r.code, EXIT_FINDING)
+
+    def test_zero_exit_with_unintelligible_output_is_not_credited(self):
+        # Neither finding lines nor a summary - whatever this is, it is not
+        # an analysis we understood. Credit withheld, so the no-SAST judgment
+        # fires and the greps stay findings instead of demoting.
+        r = self._check(_proc(code=0, out="something entirely unexpected\n"))
+        self.assertNotIn("zizmor", r.data["sast"])
+        self.assertTrue(any("matched no known shape" in n for n in r.notes), r.notes)
+        self.assertNotEqual(r.code, EXIT_CLEAN)
+
+    def test_zero_exit_with_empty_output_is_not_credited(self):
+        r = self._check(_proc(code=0, out=""))
+        self.assertNotIn("zizmor", r.data["sast"])
+        self.assertNotEqual(r.code, EXIT_CLEAN)
+
+    def test_colored_clean_summary_is_still_credited(self):
+        # The other side: a genuinely clean colored run keeps its credit -
+        # withholding it would spam judgments on every healthy CI runner.
+        clean = "\x1b[32mNo findings to report. Good job!\x1b[0m\n"
+        wf_clean = "name: x\non: [push]\npermissions: {}\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n"
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, ".github", "workflows"))
+        with open(os.path.join(d, ".github", "workflows", "w.yml"), "w") as fh:
+            fh.write(wf_clean)
+        with patch.object(ci, "have", lambda t: t == "zizmor"), \
+             patch.object(ci, "run", lambda *a, **k: _proc(code=0, out=clean)):
+            r = ci.check(d, audit=False)
+        self.assertIn("zizmor", r.data["sast"])
+        self.assertEqual(r.code, EXIT_CLEAN, [f.what for f in r.findings])
+
+    def test_zizmor_is_asked_not_to_color_at_all(self):
+        # Parsing colored output is the fallback; the front door is asking
+        # the scanner for machine-readable text in the first place.
+        seen = []
+
+        def fake_run(argv, **k):
+            seen.append(list(argv))
+            return _proc(code=0, out="No findings to report. Good job!\n")
+
+        with patch.object(ci, "have", lambda t: t == "zizmor"), \
+             patch.object(ci, "run", fake_run):
+            ci.check(self._repo(), audit=False)
+        zargvs = [a for a in seen if a and a[0] == "zizmor"]
+        self.assertTrue(zargvs, "zizmor never invoked")
+        for argv in zargvs:
+            self.assertIn("--color=never", argv, argv)
 
 
 class TestDependencyAuditNeverFakesAScan(unittest.TestCase):

@@ -43,6 +43,18 @@ _PERMS_RE = re.compile(r"^\s*permissions:\s*(.*)$")
 # actionlint -oneline emits `path:line:col: message [rule]`. Anything else on
 # that stream is actionlint talking about itself, not about the workflow.
 _ACTIONLINT_RE = re.compile(r"^([^\s:]+:\d+:\d+):\s+\S")
+# zizmor 1.25 forces ANSI color whenever the CI env var is set (its is_ci()
+# maps straight to ColorMode::Always), so on a GitHub-hosted runner every
+# finding line arrives as `\x1b[1m\x1b[33mwarning[...]` - and a line-anchored
+# parse saw nothing while zizmor kept its credit. --color=never asks the
+# scanner not to; this strip assumes a scanner that did not listen. Covers
+# SGR sequences and OSC 8 hyperlinks (zizmor renders both in plain mode). XX
+_ANSI_RE = re.compile(r"\x1b(?:\[[0-9;]*m|\]8;;[^\x07\x1b]*(?:\x07|\x1b\\))")
+# Every real zizmor analysis ends in one of two shapes: finding lines, or a
+# "No findings to report" / "N findings (...)" summary. Output with neither
+# is a scanner whose output format we no longer understand - crediting it
+# would silently drop findings, which is exactly what the color bug did.
+_ZDONE_RE = re.compile(r"(?m)^\s*(?:No findings to report|\d+\s+findings?\b)")
 
 
 def _workflow_files(repo: str) -> list[str]:
@@ -238,23 +250,36 @@ def check(
         # RISK - reported as judgment, naming that the repo suppressed them,
         # never silently honoured and never silently escalated. (¬‿¬)
         base = ["zizmor", "--offline", "--min-severity=low", "--format=plain",
-                "--no-exit-codes", ".github/workflows/"]
+                "--color=never", "--no-exit-codes", ".github/workflows/"]
         p_honoured = run(base, cwd=repo, timeout=300)
         p_neutral = run(base[:-1] + ["--no-config", "--no-ignores", base[-1]],
                         cwd=repo, timeout=300)
 
         def _zfindings(proc):
             return [
-                ln.strip() for ln in proc.text().splitlines()
+                ln.strip() for ln in _ANSI_RE.sub("", proc.text()).splitlines()
                 if re.match(r"^(error|warning|note)\[", ln.strip())
             ]
 
+        neutral_findings = _zfindings(p_neutral)
         if p_neutral.timed_out or p_honoured.timed_out:
             r.note("zizmor timed out - NOT counted as a scanner that ran")
+        elif p_neutral.code == 0 and not neutral_findings and not _ZDONE_RE.search(
+            _ANSI_RE.sub("", p_neutral.text())
+        ):
+            # Exit 0 alone is not proof of an analysis. On GitHub-hosted
+            # runners zizmor colorized every line, the parse matched nothing,
+            # and a workflow with template injection + pull_request_target
+            # was credited as "clean under zizmor". If the output matches no
+            # shape we know, the scan did not happen as far as we can tell -
+            # say so and withhold credit, so --require-sast and the no-SAST
+            # judgment fire instead of a false CLEAN. 💀
+            r.note("zizmor exited 0 but its output matched no known shape - not credited; its output follows")
+            r.note_foreign("zizmor", p_neutral.text().strip()[-200:] or "(no output)")
         elif p_neutral.code == 0:
             sast_ran.append("zizmor")
             honoured = set(_zfindings(p_honoured)) if p_honoured.code == 0 else set()
-            for ln in _zfindings(p_neutral):
+            for ln in neutral_findings:
                 if ln in honoured or p_honoured.code != 0:
                     r.add(
                         Finding(what="zizmor reported a workflow issue").with_foreign("zizmor", ln)

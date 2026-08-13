@@ -55,7 +55,7 @@ crosscheck/
                           #   given KIND of work belongs on
   specs/                  # hand-written enforce specs + fixtures (see its README)
                           #   .redruns.json = proof each control has been seen to FAIL
-  tests/                  # unittest; 200 tests, incl. suite-wide detector + provenance invariants
+  tests/                  # unittest; 205 tests, incl. suite-wide detector + provenance invariants
   install.sh              # ~/.local/bin/cc launcher + optional pre-push hook
 ```
 
@@ -220,7 +220,7 @@ regression runner (ghost blocks its own tester from inside an agent).
 
 ## last updated
 
-2026-08-13 — 7 checks, 200 tests, skill + adjudicate workflow, own CI.
+2026-08-13 — 7 checks, 205 tests, skill + adjudicate workflow, own CI.
 All open external-review items closed across three PRs: shape-validated
 dependency audits, JUDGMENT for unverified VRP floor rows, a positive
 `allowed_when` predicate for `enforce` allowed-cases (plus a red-run
@@ -230,7 +230,12 @@ that defer to zizmor when it actually ran, a `baseline` that refuses to
 attribute over dirty-generated gitignored state, per-producer foreign-text
 quarantine with canary tests (`Result.note_foreign` for note-shaped foreign
 text), spec loading confined to the spec dir, and sentinel DENY failing
-closed behind `--override-sentinel`.
+closed behind `--override-sentinel`. Plus one caught by this repo's own
+self-audit canary: zizmor's forced ANSI color on GitHub-hosted runners
+(`CI=true` → ColorMode::Always) made every finding line unparseable while
+zizmor kept its credit - fixed with `--color=never`, an ANSI strip before
+the parse, and a credit rule that refuses exit-0 output matching no known
+shape.
 An external xhigh review (gpt-5.6-sol, `docs/codex-review-2026-08-10.md`) found
 17 defects the in-house gates missed; the verdict-corrupting subset is fixed and
 regression-tested in `tests/test_verdict_integrity.py`. Open items from it are
