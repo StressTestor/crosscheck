@@ -90,44 +90,10 @@ jobs:
           sudo install -m755 gitleaks /usr/local/bin/gitleaks
           python3 crosscheck.py secrets . --history
 
-      # TEMPORARY diagnostics - remove before merge. zizmor produces findings
-      # on this fixture locally but none on this runner; capture its raw
-      # behavior here to find out why.
-      - name: TEMP zizmor ground truth on the fixture
-        run: |
-          set -uo pipefail
-          echo "== which/version =="
-          which -a zizmor || true
-          zizmor --version || true
-          cd specs/fixtures/junk-sast-config
-          rc=0
-          zizmor --offline --min-severity=low --format=plain --no-exit-codes --no-config --no-ignores .github/workflows/ >/tmp/zn.out 2>/tmp/zn.err || rc=$?
-          echo "== neutral exit=$rc stdout_bytes=$(wc -c </tmp/zn.out) stderr_bytes=$(wc -c </tmp/zn.err) =="
-          echo "== neutral stdout od (first 60 lines) =="
-          od -c /tmp/zn.out | head -60
-          echo "== neutral stderr (verbatim) =="
-          cat /tmp/zn.err
-          rc=0
-          zizmor --offline --min-severity=low --format=plain --no-exit-codes .github/workflows/ >/tmp/zh.out 2>/tmp/zh.err || rc=$?
-          echo "== honoured exit=$rc stdout_bytes=$(wc -c </tmp/zh.out) stderr_bytes=$(wc -c </tmp/zh.err) =="
-          od -c /tmp/zh.out | head -20
-          tail -5 /tmp/zh.err
-          cd ../../..
-          echo "== same invocation through cc.run.run =="
-          python3 - <<'EOF'
-          from cc.run import run
-          p = run(
-              ["zizmor", "--offline", "--min-severity=low", "--format=plain",
-               "--no-exit-codes", "--no-config", "--no-ignores", ".github/workflows/"],
-              cwd="specs/fixtures/junk-sast-config", timeout=300,
-          )
-          print("code", p.code, "out_bytes", len(p.out), "err_bytes", len(p.err))
-          print("OUT:", repr(p.out[:600]))
-          print("ERR:", repr(p.err[-600:]))
-          EOF
-
       # The fixture under specs/ is deliberately vulnerable. Prove cc ci still
-      # flags it - a self-audit that only ever passes proves nothing.
+      # flags it - a self-audit that only ever passes proves nothing. This
+      # canary earns its keep: it is what caught zizmor's forced-color output
+      # being dropped by the finding parse on GitHub-hosted runners.
       - name: the deliberately-bad fixture must still fail
         run: |
           set -euo pipefail

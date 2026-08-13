@@ -55,7 +55,7 @@ crosscheck/
                           #   given KIND of work belongs on
   specs/                  # hand-written enforce specs + fixtures (see its README)
                           #   .redruns.json = proof each control has been seen to FAIL
-  tests/                  # unittest; 188 tests, incl. suite-wide detector + provenance invariants
+  tests/                  # unittest; 193 tests, incl. suite-wide detector + provenance invariants
   install.sh              # ~/.local/bin/cc launcher + optional pre-push hook
 ```
 
@@ -220,7 +220,7 @@ regression runner (ghost blocks its own tester from inside an agent).
 
 ## last updated
 
-2026-08-13 — 7 checks, 188 tests, skill + adjudicate workflow, own CI.
+2026-08-13 — 7 checks, 193 tests, skill + adjudicate workflow, own CI.
 Six more external-review items closed: shape-validated dependency audits,
 JUDGMENT for unverified VRP floor rows, a positive `allowed_when` predicate
 for `enforce` allowed-cases (plus a red-run fingerprint that covers cwd/env and
