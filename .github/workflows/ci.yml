@@ -91,7 +91,9 @@ jobs:
           python3 crosscheck.py secrets . --history
 
       # The fixture under specs/ is deliberately vulnerable. Prove cc ci still
-      # flags it - a self-audit that only ever passes proves nothing.
+      # flags it - a self-audit that only ever passes proves nothing. This
+      # canary earns its keep: it is what caught zizmor's forced-color output
+      # being dropped by the finding parse on GitHub-hosted runners.
       - name: the deliberately-bad fixture must still fail
         run: |
           set -euo pipefail
