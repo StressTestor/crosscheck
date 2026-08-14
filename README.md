@@ -133,6 +133,9 @@ the other.
 python3 -m unittest discover -s tests -t .
 ```
 
-193 tests. real git repos, real subprocesses, and the adversarial cases are the
+205 tests. real git repos, real subprocesses, and the adversarial cases are the
 point - `notaneero.com` and `eero.com.attacker.net` both have to come back OUT,
-and so does `github.com/google-not` under a `github.com/google` policy.
+and so does `github.com/google-not` under a `github.com/google` policy. a
+canary token planted in scanner output, commit headers, test ids or workflow
+refs must surface ONLY in tagged `foreign` fields, never in crosscheck's own
+prose - one test per producer, mocked scanners throughout.

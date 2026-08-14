@@ -55,7 +55,7 @@ crosscheck/
                           #   given KIND of work belongs on
   specs/                  # hand-written enforce specs + fixtures (see its README)
                           #   .redruns.json = proof each control has been seen to FAIL
-  tests/                  # unittest; 193 tests, incl. suite-wide detector + provenance invariants
+  tests/                  # unittest; 205 tests, incl. suite-wide detector + provenance invariants
   install.sh              # ~/.local/bin/cc launcher + optional pre-push hook
 ```
 
@@ -220,13 +220,22 @@ regression runner (ghost blocks its own tester from inside an agent).
 
 ## last updated
 
-2026-08-13 — 7 checks, 193 tests, skill + adjudicate workflow, own CI.
-Six more external-review items closed: shape-validated dependency audits,
-JUDGMENT for unverified VRP floor rows, a positive `allowed_when` predicate
-for `enforce` allowed-cases (plus a red-run fingerprint that covers cwd/env and
-a ledger write that fails loud), path-scoped `scope` entries with the shipped-
-policy smoke test, `ci` greps that defer to zizmor when it actually ran, and a
-`baseline` that refuses to attribute over dirty-generated gitignored state.
+2026-08-13 — 7 checks, 205 tests, skill + adjudicate workflow, own CI.
+All open external-review items closed across three PRs: shape-validated
+dependency audits, JUDGMENT for unverified VRP floor rows, a positive
+`allowed_when` predicate for `enforce` allowed-cases (plus a red-run
+fingerprint that covers cwd/env and a ledger write that fails loud),
+path-scoped `scope` entries with the shipped-policy smoke test, `ci` greps
+that defer to zizmor when it actually ran, a `baseline` that refuses to
+attribute over dirty-generated gitignored state, per-producer foreign-text
+quarantine with canary tests (`Result.note_foreign` for note-shaped foreign
+text), spec loading confined to the spec dir, and sentinel DENY failing
+closed behind `--override-sentinel`. Plus one caught by this repo's own
+self-audit canary: zizmor's forced ANSI color on GitHub-hosted runners
+(`CI=true` → ColorMode::Always) made every finding line unparseable while
+zizmor kept its credit - fixed with `--color=never`, an ANSI strip before
+the parse, and a credit rule that refuses exit-0 output matching no known
+shape.
 An external xhigh review (gpt-5.6-sol, `docs/codex-review-2026-08-10.md`) found
 17 defects the in-house gates missed; the verdict-corrupting subset is fixed and
 regression-tested in `tests/test_verdict_integrity.py`. Open items from it are
@@ -246,10 +255,14 @@ covering these):
   `policies/README.md` always demanded now exists and runs the SHIPPED policy,
   not a fixture. Control characters in operator input are rejected outright
   and rejected input is quarantined in `foreign`, never `where`.
-- foreign text still reaches trusted `what`/`detail`/`fix`/`where`/`notes`/`data`
-  in `ci`, `secrets`, `baseline` and `pr-branch`. The emission invariant is
-  real for the `foreign` field but is NOT enforced at every producer, and the
-  suite-wide test for it only exercises `with_foreign()` itself.
+- ~~foreign text still reaches trusted fields in `ci`, `secrets`, `baseline`
+  and `pr-branch`~~ — **FIXED**, at the producers this time: workflow `uses:`
+  refs, scanner self-diagnostics, gitleaks paths, pre-existing test ids and
+  commit headers all travel through `with_foreign()` / `Result.note_foreign()`
+  (capped, tagged, `|`-quoted), and `pr-branch` stores capped commit headers
+  in `data`, never whole commit objects. The vacuous suite-wide test that
+  only exercised `with_foreign()` itself is replaced by per-producer canary
+  tests with mocked scanners.
 - ~~`ci` honours the audited repo's ignore rules~~ — **FIXED.** `ci` now runs
   zizmor twice: once honouring the repo's config, once with `--no-config
   --no-ignores`. A finding that survives the repo's own config is a FINDING; a
@@ -294,18 +307,24 @@ covering these):
 
 **Known, accepted limits** (documented rather than papered over):
 - **`cc enforce` executes probes in a blind spot the local PreToolUse guard
-  cannot see.** sentinel/ghost inspects the *agent's Bash tool* command line;
-  enforce's probes are subprocess argv from inside python, so their argv is
-  never shown to it. Verified: a probe attempting to read `/etc/shadow` reached
-  the target and ran, in a session where the same guard blocked the agent five
-  separate times for less (`specs/_guard-canary.json` is the standing
-  regression). Mitigation is **instrumentation, not containment**: every probe
-  is put past `sentinel check` as a NON-BLOCKING oracle and appended to a
-  hash-chained log at `~/.crosscheck/probe-audit.jsonl` before it fires, and an
-  unwritable log refuses the run. That is tamper-evidence and legibility, **not
-  an authorization boundary** — it runs as the same user who could rewrite the
-  file. An agent that authors a hostile spec *and commits it* defeats it
-  entirely; ordinary review of spec diffs is the only control on that case.
+  cannot see on its own.** sentinel/ghost inspects the *agent's Bash tool*
+  command line; enforce's probes are subprocess argv from inside python, so
+  their argv is never shown to it unprompted. Verified: a probe attempting to
+  read `/etc/shadow` reached the target and ran, in a session where the same
+  guard blocked the agent five separate times for less
+  (`specs/_guard-canary.json` is the standing regression). Mitigation: every
+  probe's argv is handed to `sentinel check` on the way past, and a DENY now
+  **fails closed** — the probe does not fire and the control is INVALID —
+  unless the operator passes `--override-sentinel`, which fires it and stamps
+  the override into the hash-chained audit log at
+  `~/.crosscheck/probe-audit.jsonl` (an unwritable log still refuses the run).
+  The log is **tamper-evidence and legibility, not an authorization boundary**
+  — it runs as the same user who could rewrite the file. Two mechanical
+  tightenings on the spec side: `cc enforce` loads bare names from the spec
+  dir only (explicit filesystem paths are refused — a spec is arbitrary argv,
+  it goes through review or it does not run), and an agent that authors a
+  hostile spec *and commits it* still defeats the audit entirely; ordinary
+  review of spec diffs remains the only control on that case.
 - **`specs/.redruns.json` is a discipline record, not a security boundary.**
   Anyone who can edit a spec can edit it. It exists to stop honest mistakes.
 - `ci`'s `uses:`/`permissions:` greps are line-oriented, not YAML-aware; a

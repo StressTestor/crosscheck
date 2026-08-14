@@ -156,17 +156,19 @@ def audit_path() -> str:
 
 
 def _sentinel_verdict(argv: list[str]) -> str:
-    """Ask the local guard what it thinks of this probe. NON-BLOCKING.
+    """Ask the local guard what it thinks of this probe.
 
     enforce's probes are subprocess argv, so sentinel/ghost - a PreToolUse hook
     on the agent's Bash tool - never sees them. That is a blind spot in the one
     module built to run hostile input, so we hand the guard the argv on the way
-    past and RECORD its opinion.
+    past.
 
-    Deliberately an oracle, never a veto: a guard that can refuse probes turns
-    every DENY into UNTESTABLE-forever, which is the exact defect that killed
-    the guard-corpus module. Recording preserves discrimination; blocking
-    destroys it. (¬‿¬)
+    A DENY fails closed by default (INVALID, probe not fired), because a probe
+    firing PAST a guard refusal silently is the boundary story this module was
+    dinged for. But it must not become UNTESTABLE-forever - that is the exact
+    defect that killed the guard-corpus module - so `--override-sentinel` runs
+    the probe anyway, with the override recorded in the audit log where it can
+    be answered for. Discrimination preserved, silence removed. (¬‿¬)
     """
     if not have("sentinel"):
         return "unavailable"
@@ -178,7 +180,8 @@ def _sentinel_verdict(argv: list[str]) -> str:
     return f"deny({p.code})"
 
 
-def _audit(argv: list[str], cwd: str | None, spec_sha: str, verdict: str) -> str | None:
+def _audit(argv: list[str], cwd: str | None, spec_sha: str, verdict: str,
+           overridden: bool = False) -> str | None:
     """Hash-chained append-only record. Returns an error string, or None.
 
     Tamper-EVIDENCE and legibility, NOT an authorization boundary: this runs as
@@ -207,6 +210,10 @@ def _audit(argv: list[str], cwd: str | None, spec_sha: str, verdict: str) -> str
             "spec_sha": spec_sha,
             "sentinel": verdict,
         }
+        if overridden:
+            # Only stamped when a DENY was overridden, so the common allow
+            # rows stay byte-identical to the pre-override format.
+            entry["sentinel_overridden"] = True
         entry["chain"] = hashlib.sha256(
             (prev + json.dumps(entry, sort_keys=True)).encode()
         ).hexdigest()
@@ -229,14 +236,28 @@ def _now_iso() -> str:
 
 
 def load_spec(path_or_name: str) -> tuple[dict | None, str | None]:
-    """A path, or a bare name resolved inside specs/. No traversal."""
-    if os.sep in path_or_name or path_or_name.endswith(".json"):
-        path = os.path.abspath(os.path.expanduser(path_or_name))
-    else:
-        root = os.path.realpath(spec_dir())
-        path = os.path.realpath(os.path.join(root, f"{path_or_name}.json"))
-        if path != root and not path.startswith(root + os.sep):
-            return None, f"spec name {path_or_name!r} escapes the spec directory"
+    """A bare name resolved inside specs/ ONLY. Paths are refused.
+
+    A spec is arbitrary argv, and load_spec used to take explicit filesystem
+    paths too - so any json anywhere on disk could become an execution plan
+    (`cc enforce /tmp/whatever.json`), sidestepping the review that specs/
+    diffs get. The side door is gone: bare names under spec_dir() only. The
+    sanctioned override for tests and alternate suites is the CROSSCHECK_SPECS
+    env var, which is an OPERATOR decision, not spec content. XX
+    """
+    name = (path_or_name or "").strip()
+    if name.endswith(".json"):
+        name = name[:-5]  # convenience: `cc enforce foo.json` == `cc enforce foo`
+    if not name or os.sep in name or (os.altsep and os.altsep in name) or ".." in name:
+        return None, (
+            f"specs load by bare name from {spec_dir()} - paths are refused "
+            f"(a spec is arbitrary argv; it goes through the spec dir and its review, "
+            f"or it does not run)"
+        )
+    root = os.path.realpath(spec_dir())
+    path = os.path.realpath(os.path.join(root, f"{name}.json"))
+    if path != root and not path.startswith(root + os.sep):
+        return None, f"spec name {path_or_name!r} escapes the spec directory"
     if not os.path.isfile(path):
         return None, f"no spec at {path}"
     try:
@@ -362,6 +383,7 @@ def check(
     dry_run: bool = False,
     timeout: int = 120,
     record_red: bool = False,
+    override_sentinel: bool = False,
 ) -> Result:
     r = Result(check=CHECK)
 
@@ -453,9 +475,25 @@ def check(
             continue
 
         verdict = _sentinel_verdict(probe)
-        audit_err = _audit(probe, cwd, spec_sha, verdict)
+        denied = verdict.startswith("deny")
+        if denied and not override_sentinel:
+            # Fail closed: a probe firing PAST a guard refusal, silently, is
+            # the boundary this module was dinged for. Not UNTESTABLE-forever
+            # though - the override exists, runs the probe, and is recorded in
+            # the audit log where it can be answered for.
+            r.add(
+                Finding(
+                    what=f"{name}: the local guard would DENY this probe - not fired",
+                    detail=f"sentinel said {verdict}; enforce fails closed on a guard refusal",
+                    fix="review the probe; if it is genuinely fine, re-run with --override-sentinel (recorded)",
+                    severity="invalid",
+                )
+            )
+            verdicts[name] = UNTESTABLE
+            continue
+        audit_err = _audit(probe, cwd, spec_sha, verdict, overridden=denied)
         if audit_err:
-            # Fail closed on audit failure ONLY. An unrecorded probe is a probe
+            # Fail closed on audit failure too. An unrecorded probe is a probe
             # that fired silently, which is the thing this is for.
             r.add(
                 Finding(
@@ -467,8 +505,8 @@ def check(
             )
             verdicts[name] = UNTESTABLE
             continue
-        if verdict.startswith("deny"):
-            r.note(f"{name}: sentinel would DENY this probe (recorded, not blocked)")
+        if denied:
+            r.note(f"{name}: sentinel DENY overridden by --override-sentinel (recorded in the audit log)")
 
         # inherit_env=False is the one thing that ported out of pr-body's
         # sandbox when it was deleted: a probe gets PATH and whatever the spec

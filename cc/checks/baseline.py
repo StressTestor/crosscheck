@@ -332,12 +332,17 @@ def check(repo: str, suite_argv: list[str], timeout: int = 900, as_dict=None) ->
         }
     )
     r.note(f"dirty run: {len(f_dirty)} failing / clean run: {len(f_clean)} failing")
+    # Test ids came out of someone else's suite - a "test name" is arbitrary
+    # text to a hostile harness, and these used to be f-stringed into trusted
+    # notes. Same quarantine as everywhere else. XX
     if pre_existing:
         r.note(f"pre-existing (present in BOTH runs, safe to call pre-existing): {len(pre_existing)}")
         for t in pre_existing[:20]:
-            r.note(f"    pre-existing: {t}")
+            r.note_foreign("test suite", t)
     if fixed:
-        r.note(f"your change FIXES {len(fixed)}: {', '.join(fixed[:10])}")
+        r.note(f"your change FIXES {len(fixed)} test(s):")
+        for t in fixed[:10]:
+            r.note_foreign("test suite", t)
 
     for t in introduced:
         # The test id came out of someone else's suite - foreign text.
