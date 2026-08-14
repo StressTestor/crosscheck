@@ -83,18 +83,25 @@ def ledger_path() -> str:
     return os.path.join(spec_dir(), ".redruns.json")
 
 
-def control_fingerprint(control: dict) -> str:
+def control_fingerprint(control: dict, cwd: str | None = None) -> str:
     """Hash the parts of a control that decide its verdict.
 
-    Keyed on name + probe + refused_when + expect, NOT the whole spec, so
-    editing an unrelated control does not invalidate this one's proof.
+    Keyed on everything that changes WHAT EXECUTES or HOW the outcome is
+    read - name, probe, both recognition rules, expect, env, and the cwd the
+    probes run in - NOT the whole spec, so editing an unrelated control does
+    not invalidate this one's proof. cwd and env used to be omitted, which
+    left an old proof valid for a different executable behaviour: the same
+    relative probe path in a different directory is a different program. XX
     """
     payload = json.dumps(
         {
             "name": control.get("name"),
             "probe": control.get("probe"),
             "refused_when": control.get("refused_when"),
+            "allowed_when": control.get("allowed_when"),
             "expect": control.get("expect", "refused"),
+            "env": control.get("env"),
+            "cwd": cwd,
         },
         sort_keys=True,
     )
@@ -109,7 +116,7 @@ def _load_ledger() -> dict:
         return {}
 
 
-def _record_red(control: dict, verdict: str) -> None:
+def _record_red(control: dict, verdict: str, cwd: str | None = None) -> str | None:
     """Remember that this exact control has been SEEN TO FAIL.
 
     A control that has never gone red is a control nobody has tested. The
@@ -121,9 +128,13 @@ def _record_red(control: dict, verdict: str) -> None:
 
     This is a discipline ledger, not a security boundary: anyone who can edit
     the spec can edit this. It exists to stop honest mistakes, and it says so.
+
+    Returns an error string when the write failed, None on success. The old
+    version swallowed OSError while the caller claimed "recorded red run"
+    unconditionally - a proof that never landed, narrated as landed. XX
     """
     led = _load_ledger()
-    led[control_fingerprint(control)] = {
+    led[control_fingerprint(control, cwd)] = {
         "name": control.get("name"),
         "verdict": verdict,
     }
@@ -131,8 +142,9 @@ def _record_red(control: dict, verdict: str) -> None:
         os.makedirs(os.path.dirname(ledger_path()), exist_ok=True)
         with open(ledger_path(), "w", encoding="utf-8") as fh:
             json.dump(led, fh, indent=2, sort_keys=True)
-    except OSError:
-        pass
+        return None
+    except OSError as e:
+        return str(e)
 
 
 AUDIT_LOG_ENV = "CROSSCHECK_PROBE_AUDIT"
@@ -247,15 +259,17 @@ def _dig(doc, path: str):
     return True, cur
 
 
-def _refused(control: dict, p) -> tuple[bool | None, str]:
-    """Was the probe refused? None means we cannot tell -> UNTESTABLE.
+def _rule_holds(rule: dict | None, p) -> tuple[bool | None, str]:
+    """Does a recognition rule hold for this probe outcome? None = cannot tell.
 
-    Exit code alone is never enough: a target that dies for an unrelated reason
-    looks identical to one that refused.
+    Shared by refused_when and allowed_when, because both answer the same
+    question: is this outcome the one the spec named? Exit code alone is never
+    enough - a target that dies for an unrelated reason looks identical to one
+    that refused, and a target that crashes looks identical to one that ran.
     """
-    rule = control.get("refused_when") or {}
+    rule = rule or {}
     if not rule:
-        return None, "spec gives no refused_when rule, so a refusal cannot be recognised"
+        return None, "no recognition rule was given"
 
     text = p.text()
     checks = []
@@ -272,9 +286,20 @@ def _refused(control: dict, p) -> tuple[bool | None, str]:
         checks.append(p.code not in rule["exit_code_not_in"])
 
     if not checks:
-        return None, "refused_when has no recognised keys"
-    # All stated conditions must hold. A partial match is not a refusal.
+        return None, "the rule has no recognised keys"
+    # All stated conditions must hold. A partial match is not a match.
     return all(checks), ""
+
+
+def _refused(control: dict, p) -> tuple[bool | None, str]:
+    """Was the probe refused? None means we cannot tell -> UNTESTABLE."""
+    rule = control.get("refused_when") or {}
+    if not rule:
+        return None, "spec gives no refused_when rule, so a refusal cannot be recognised"
+    held, why = _rule_holds(rule, p)
+    if held is None:
+        return None, "refused_when has no recognised keys"
+    return held, ""
 
 
 def _claims_applied(control: dict, p, cwd: str | None) -> tuple[bool | None, str]:
@@ -404,6 +429,23 @@ def check(
             verdicts[name] = UNTESTABLE
             continue
 
+        if expect == "allowed" and not (control.get("allowed_when") or {}):
+            # "Allowed" was implemented as merely "not refused", so a crashed
+            # allowed-case whose output missed the refusal marker counted as
+            # successfully allowed. Success needs its own positive rule, and a
+            # spec that cannot state one has not pinned anything. Checked
+            # BEFORE the probe fires - a malformed spec earns no execution. XX
+            r.add(
+                Finding(
+                    what=f"{name}: expect:'allowed' has no allowed_when rule",
+                    detail="absence of a refusal is not proof of success - a crashed allowed-case would read as allowed",
+                    fix="add allowed_when naming how success is recognised (same keys as refused_when)",
+                    severity="invalid",
+                )
+            )
+            verdicts[name] = UNTESTABLE
+            continue
+
         if dry_run:
             r.note(f"WOULD RUN [{name}] expect={expect}: {' '.join(probe)}")
             verdicts[name] = "DRY-RUN"
@@ -466,24 +508,58 @@ def check(
             verdicts[name] = UNTESTABLE
             continue
 
-        refused, why = _refused(control, p)
-        if refused is None:
-            r.add(
-                Finding(
-                    what=f"{name}: cannot tell whether the probe was refused - UNTESTABLE",
-                    detail=why or "refused_when did not resolve",
-                    fix="give the control a refused_when rule that names how a refusal looks",
-                    severity="invalid",
-                ).with_foreign("probe output", p.text())
-            )
-            verdicts[name] = UNTESTABLE
-            continue
-
-        held = refused if expect == "refused" else (not refused)
+        if expect == "refused":
+            refused, why = _refused(control, p)
+            if refused is None:
+                r.add(
+                    Finding(
+                        what=f"{name}: cannot tell whether the probe was refused - UNTESTABLE",
+                        detail=why or "refused_when did not resolve",
+                        fix="give the control a refused_when rule that names how a refusal looks",
+                        severity="invalid",
+                    ).with_foreign("probe output", p.text())
+                )
+                verdicts[name] = UNTESTABLE
+                continue
+            held = refused
+        else:
+            # expect == "allowed": success is a POSITIVE match on allowed_when.
+            # Not-allowed then splits on whether the outcome is a recognisable
+            # refusal (the pinned negative broke: over-block, a real finding)
+            # or something else entirely (a crash - which is not an allowance
+            # and not a refusal, so it decides nothing). XX
+            allowed, why = _rule_holds(control.get("allowed_when"), p)
+            if allowed is None:
+                r.add(
+                    Finding(
+                        what=f"{name}: allowed_when did not resolve - UNTESTABLE",
+                        detail=why or "allowed_when has no recognised keys",
+                        fix="give allowed_when at least one recognisable condition",
+                        severity="invalid",
+                    ).with_foreign("probe output", p.text())
+                )
+                verdicts[name] = UNTESTABLE
+                continue
+            if allowed:
+                held = True
+            else:
+                refused, _why = _rule_holds(control.get("refused_when"), p)
+                if refused is not True:
+                    r.add(
+                        Finding(
+                            what=f"{name}: the allowed-case probe neither succeeded nor was recognisably refused - UNTESTABLE",
+                            detail="it most likely crashed; a crash is not an allowance and not a refusal",
+                            fix="fix the probe, or the allowed_when/refused_when rules, before trusting any verdict",
+                            severity="invalid",
+                        ).with_foreign("probe output", p.text())
+                    )
+                    verdicts[name] = UNTESTABLE
+                    continue
+                held = False
 
         if held:
             verdicts[name] = ENFORCED
-            if control_fingerprint(control) in ledger:
+            if control_fingerprint(control, cwd) in ledger:
                 r.note(f"{ENFORCED}  {name} - {declares or 'control holds'}")
             else:
                 # An ENFORCED from a control never seen to fail is not evidence.
@@ -514,8 +590,21 @@ def check(
         # permanently unprovable. Any outcome where the control did not hold is
         # a red run, whichever direction it was pinned in. >:[
         if record_red:
-            _record_red(control, UNENFORCED_SILENT if claims is True else UNENFORCED)
-            r.note(f"recorded red run for {name} - its ENFORCED verdicts now count")
+            rec_err = _record_red(control, UNENFORCED_SILENT if claims is True else UNENFORCED, cwd)
+            if rec_err:
+                # The red run was OBSERVED but the proof never landed. Saying
+                # "recorded" here would bless the control's next ENFORCED off
+                # evidence that does not exist.
+                r.add(
+                    Finding(
+                        what=f"{name}: red run observed but could NOT be recorded",
+                        detail=f"{ledger_path()}: {rec_err}",
+                        fix="fix the ledger path/permissions and re-run --record-red",
+                        severity="invalid",
+                    )
+                )
+            else:
+                r.note(f"recorded red run for {name} - its ENFORCED verdicts now count")
 
         if expect == "allowed":
             # A pinned negative broke: a legitimate operation is now refused.

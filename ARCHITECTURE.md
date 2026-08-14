@@ -55,7 +55,7 @@ crosscheck/
                           #   given KIND of work belongs on
   specs/                  # hand-written enforce specs + fixtures (see its README)
                           #   .redruns.json = proof each control has been seen to FAIL
-  tests/                  # unittest; 152 tests, incl. suite-wide detector + provenance invariants
+  tests/                  # unittest; 166 tests, incl. suite-wide detector + provenance invariants
   install.sh              # ~/.local/bin/cc launcher + optional pre-push hook
 ```
 
@@ -219,7 +219,11 @@ regression runner (ghost blocks its own tester from inside an agent).
 
 ## last updated
 
-2026-08-11 — 7 checks, 152 tests, skill + adjudicate workflow, own CI.
+2026-08-13 — 7 checks, 166 tests, skill + adjudicate workflow, own CI.
+Three more external-review items closed: shape-validated dependency audits,
+JUDGMENT for unverified VRP floor rows, and a positive `allowed_when` predicate
+for `enforce` allowed-cases (plus a red-run fingerprint that covers cwd/env and
+a ledger write that fails loud).
 An external xhigh review (gpt-5.6-sol, `docs/codex-review-2026-08-10.md`) found
 17 defects the in-house gates missed; the verdict-corrupting subset is fixed and
 regression-tested in `tests/test_verdict_integrity.py`. Open items from it are
@@ -249,12 +253,25 @@ covering these):
 - `ci`'s regex pin/permission findings cannot be cancelled by the YAML-aware
   scanners, because FINDING outranks. "The real linter runs alongside" is not
   mitigation when it cannot override.
-- `enforce` `expect:"allowed"` is implemented as merely *not refused*, so a
-  crashed allowed-case can read as successfully allowed.
+- ~~`enforce` `expect:"allowed"` is implemented as merely *not refused*~~ —
+  **FIXED.** `expect:"allowed"` now requires an `allowed_when` rule (a POSITIVE
+  match for success) and refuses to fire the probe without one. Not-allowed
+  splits on `refused_when`: a recognisable refusal is an over-block FINDING; a
+  crash matches neither and is UNTESTABLE. The red-run fingerprint also gained
+  `cwd`/`env`/`allowed_when` (proofs recorded before that must be re-recorded),
+  and a red run that could not be WRITTEN to the ledger is INVALID instead of
+  being narrated as recorded.
+- ~~pip-audit/npm empty output becomes `{}`, which "parses" and suppresses the
+  nonzero exit~~ — **FIXED.** dependency-scan results are now validated for
+  SHAPE, not just parseability: pip-audit must produce a `dependencies` list,
+  npm must produce `metadata.vulnerabilities`, and anything else (including a
+  clean-exit empty object) is INVALID, never zero findings.
 - `baseline` lets gitignored build/cache state survive the stash, so
   dirty-generated artifacts can make an introduced failure look pre-existing.
-- the `google-oss-vrp` floor emits a hard FINDING off unverified provenance; it
-  should be JUDGMENT until primary-source verified.
+- ~~the `google-oss-vrp` floor emits a hard FINDING off unverified provenance~~
+  — **FIXED.** floor rows now rule JUDGMENT unless the floor carries
+  `"verified": true`; absence of the stamp is not verification. The shipped
+  policy is stamped `false` until someone reads the primary page.
 
 **Known, accepted limits** (documented rather than papered over):
 - **`cc enforce` executes probes in a blind spot the local PreToolUse guard
@@ -277,5 +294,6 @@ covering these):
   the YAML-aware authority and run alongside.
 - the payout `floor` for `google-oss-vrp` was transcribed from Google-domain
   search summaries, **not machine-read** from the published table (both primary
-  pages are JS-rendered and return title-only to a fetch). Re-verify before
-  letting a `$0` verdict talk you out of real work.
+  pages are JS-rendered and return title-only to a fetch). The machine verdict
+  now carries that: unverified floor rows rule JUDGMENT, not FINDING, until the
+  policy is stamped `"verified": true` against the live page.
